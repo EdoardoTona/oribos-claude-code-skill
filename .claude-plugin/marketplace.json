@@ -1,0 +1,20 @@
+{
+  "name": "oribos",
+  "owner": {
+    "name": "Edoardo Tona"
+  },
+  "metadata": {
+    "description": "Plugins to read .og4 and .og3 files of Oribos orienteering software"
+  },
+  "plugins": [
+    {
+      "name": "oribos",
+      "source": "./",
+      "description": "Adds knowledge of the OG4/OG3 file format (ZIP archives containing XML race data). Claude automatically loads the skill when working with .og4 or .og3 files.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Edoardo Tona"
+      }
+    }
+  ]
+}
