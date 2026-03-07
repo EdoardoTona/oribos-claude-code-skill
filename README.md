@@ -1,6 +1,6 @@
 # Oribos Claude Code Plugin
 
-A Claude Code plugin that adds knowledge of the [Oribos](https://oribos.it) OG4/OG3 file format — orienteering competition management software by Edoardo Tona.
+A Claude Code plugin that adds knowledge of the [Oribos](https://oribos.it) OG4/OG3 file format — orienteering competition management software by Fabio Boselli.
 
 ## What it does
 
