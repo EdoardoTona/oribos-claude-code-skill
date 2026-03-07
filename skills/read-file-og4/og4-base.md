@@ -275,7 +275,10 @@ Courses are imported from IOF XML format. In staffette and one-man-relay, a sepa
 | `MAN` | `PM` | Missing punch |
 | `FTM` | `FT` | Over time limit |
 | `ERR` | `PE` | Wrong punch |
-| `SQ` | `SQ` | Disqualified |
+| `SQU` | `SQ` | Disqualified |
+| `GAR` | - | Started (during the race) |
+| `PAR` | - | Waiting for start (just entered) |
+| `DIS` | - | Missing |
 
 ### Time formats summary
 
