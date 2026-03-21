@@ -1,6 +1,6 @@
-# Oribos OG4/OG3 — Special Race Types
+# Oribos OG4/OG3 — Special Race Types & Oris Print Settings
 
-Supplement to `og4-base.md`. Load this file for: relay (Staffetta), Score-O/Rogaining, MultiDays, One Man Relay.
+Supplement to `og4-base.md`. Load this file for: relay (Staffetta), Score-O/Rogaining, MultiDays, One Man Relay, or Oris print configuration.
 
 ---
 
@@ -141,3 +141,66 @@ To reconstruct a stage result for an overall-classification athlete:
 To get all athletes in a stage (including walk-ins):
 - Overall athletes: `GaraN/AtletiMD.xml`
 - Walk-in athletes: `GaraN/Atleti.xml`
+
+---
+
+## Oris/ — Print Layout Settings for Olympic Result Information System
+
+The `Oris/` directory contains print and display configuration. Oribos creates it with defaults on first save, but it can be pre-populated to customize print output.
+
+### Files
+
+All files are stored in the `Oris/` directory inside the archive:
+
+- `Oris.xml` — all print settings (single-line XML)
+- `Logo.png` — event/organizer logo (top-left of printouts)
+- `LogoSport.png` — sport federation logo (top-right)
+- `LogoSponsor.png` — sponsor banner (bottom)
+
+### Oris.xml structure
+
+Root element `<prints>`, single-line format. Key fields:
+
+| Field | Description |
+|---|---|
+| `PrintLogoOribos` | Show Oribos branding |
+| `PrintOribos` | Show "Oribos" text |
+| `PrintNameFile` | Print filename |
+| `DrawRowsResult` | Draw alternating row backgrounds in results |
+| `DrawRowsPodium` | Draw row backgrounds in podium view |
+| `Footer` | Custom footer text |
+| `Sport` | Sport name (e.g. "Orienteering") |
+| `VictoryCeremony` | Victory ceremony title text |
+| `StampaNonPartiti` | Print DNS athletes |
+| `CategoriaTitolo` | Show category name as title |
+| `StampaCategoriaTitolo` | Print category title |
+| `Titolo` | Custom title override |
+| `PrintTitle1` / `PrintTitle2` | Show title lines |
+
+#### Logo/image positioning
+
+Each logo (`logo`, `logosport`, `logosponsor`, `logovideo`, `medaglie`, `medaglied`, `medaglief`) has:
+
+```xml
+<logo>
+  <ResImage>False</ResImage>        <!-- True = embedded resource, False = file in Oris/ -->
+  <ImageName>Logo.png</ImageName>   <!-- filename or resource path -->
+  <X>1</X><Y>1</Y>                 <!-- position (cm for print, px for video) -->
+  <W>6.1</W><H>2.8</H>            <!-- size -->
+</logo>
+```
+
+#### Color fields
+
+Colors are stored as signed 32-bit integers (ARGB). Common values: `-13421773` (dark background), `-39424` (orange title), `-1` (white text).
+
+```xml
+<BackgroundColor>-13421773</BackgroundColor>
+<TitleColor>-39424</TitleColor>
+<RowColor1>-13092808</RowColor1>
+<RowColor2>-12171706</RowColor2>
+<TextColor>-1</TextColor>
+<TextTitleColor>-1</TextTitleColor>
+<TextTitleColor1>-1</TextTitleColor1>
+<TextTitleColor2>-1</TextTitleColor2>
+```

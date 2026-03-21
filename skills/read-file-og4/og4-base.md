@@ -5,14 +5,14 @@
 ```
 MyEvent.og4
 ├── Progetto.xml          # Project metadata (event type, list of races)
-├── Immagini/             # Images (logos, bitmaps) — not relevant for data
-├── Oris/                 # ORIS (Olympic Results Information System) print layout
+├── Immagini/             # Images (logos, bitmaps) — created by Oribos on first save
+├── Oris/                 # Print layout settings (see og4-special.md for format)
 │   ├── Oris.xml          # Print/display settings (colors, logos, titles)
 │   ├── Logo.png / LogoSport.png / LogoSponsor.png
 ├── Gara1/                # First (or only) race
 │   ├── Gara.xml          # Race settings
 │   ├── Atleti.xml        # Athletes + results
-│   ├── AtletiMD.xml      # MultiDays cross-reference (empty for single-day)
+│   ├── AtletiMD.xml      # Required even for single-day (empty <atleti></atleti>)
 │   ├── Categorie.xml     # Categories
 │   ├── Percorsi.xml      # Courses
 │   └── Staffette.xml     # Relay teams (only for TipoGara=Staffetta)
@@ -78,6 +78,42 @@ Key fields:
 | `IntervalloPercorsi` | Interval between courses in minutes |
 | `RichiediNomeScarico` | `True` = always prompt for name/bib on every SI card download (useful for school events where the same cards are reused by different athletes across races) |
 | `RichiediNomeSoloNoleggio` | `True` = prompt only when downloading rented cards |
+
+### SiCardNoleggio — Rental SI card pool
+
+`<SiCardNoleggio>` in `Gara.xml` lists all SI card numbers available for rental. Each entry is a `<p>` element containing the card number. When an athlete's `S1` (SI card) matches one of these numbers, Oribos treats it as a rented card.
+
+```xml
+<SiCardNoleggio>
+  <p>205625</p>
+  <p>337709</p>
+  <p>425711</p>
+  ...
+</SiCardNoleggio>
+```
+
+### noleggi — Rental slot definitions
+
+`<noleggi>` in `Gara.xml` defines up to 4 rental slots. Each `<noleggio>` has:
+
+| Field | Description |
+|---|---|
+| `Q1` | Rental fee |
+| `Abilita` | `True` / `False` — whether this rental slot is active |
+| `Descrizione` | Label for this rental type (e.g. "Si-card") |
+
+```xml
+<noleggi>
+  <noleggio>
+    <Q1>0</Q1>
+    <Abilita>False</Abilita>
+    <Descrizione>Si-card</Descrizione>
+  </noleggio>
+  <!-- up to 4 slots -->
+</noleggi>
+```
+
+The per-athlete `<Noleggi>` field (in `Atleti.xml`) has one `<p>True/False</p>` flag for each of these 4 slots, indicating which rentals apply to that athlete.
 
 ### StatoGara values
 
@@ -159,14 +195,14 @@ Defined in `Gara.xml`. Used to publish combined M+W results for the same course.
     <Kmsf>5.24</Kmsf>           <!-- Km effort (km + climb/100) -->
     <N4>29</N4>                 <!-- Number of controls -->
     <MaxIscrizioni>80</MaxIscrizioni>
-    <SequenzaPunti>             <!-- Control codes in order -->
+    <SequenzaPunti>             <!-- Control codes in order (NEVER 0 — must be actual codes) -->
       <p>35</p><p>34</p>...<p>100</p>
     </SequenzaPunti>
-    <LanterneObbligatorie>      <!-- Parallel to SequenzaPunti: True = mandatory (Score-O) -->
+    <LanterneObbligatorie>      <!-- Parallel to SequenzaPunti: False for normal races -->
       <p>False</p>...
     </LanterneObbligatorie>
-    <PuntiScore>                <!-- Points per control (Score-O only, otherwise 0) -->
-      <p>10</p><p>20</p>...
+    <PuntiScore>                <!-- Parallel to SequenzaPunti: 0 for normal races, points for Score-O -->
+      <p>0</p><p>0</p>...
     </PuntiScore>
     <!-- Score-O only: -->
     <UtilizzoTempoLimite>True</UtilizzoTempoLimite>
@@ -177,7 +213,16 @@ Defined in `Gara.xml`. Used to publish combined M+W results for the same course.
 
 **Important:** The last entry in `SequenzaPunti` is the last **control** before the finish chute, not the finish line itself (typically code 100 or 200). The race time `T7` includes the run-in from that last control to the actual finish — typically 13–24 seconds. Split times in `TempoSplit` cover up to the last control punch only; `T7 - lastSplit = run-in time`.
 
-Courses are imported from IOF XML format. In staffette and one-man-relay, a separate course is created per athlete.
+### Populating SequenzaPunti from IOF XML 3.0
+
+Each `<Course>` in the IOF file contains `<CourseControl>` elements. To build `<SequenzaPunti>`:
+1. Iterate `<CourseControl>` elements in order.
+2. Include only those with `type="Control"` — skip `type="Start"`, `type="Finish"`, and `type="CrossingPoint"`.
+3. Use the `<Control>` child text as the `<p>` value (this is the control code, e.g. `32`, `100`).
+
+A control code may appear more than once (butterfly loops). `<SequenzaPunti>` must list every visit.
+
+In staffette and one-man-relay, a separate course is created per athlete.
 
 ---
 
@@ -289,3 +334,43 @@ Courses are imported from IOF XML format. In staffette and one-man-relay, a sepa
 | TempoSplit | `HH.MM.SS` (dots) | Cumulative from athlete's own start |
 | Radio `t` attribute | `HH.MM.SS` (dots) | Absolute wall-clock |
 | Dates (D1, DataGara, TempoScarico) | `MM/DD/YYYY HH:MM:SS` | — |
+
+---
+
+## Creating an OG4 file from scratch
+
+Rules to produce a file Oribos opens without errors. Violations cause silent failures or `Riferimento a un oggetto non impostato su un'istanza di oggetto`.
+
+### Archive rules
+
+- **`Oris/` directory is optional** — Oribos creates it with defaults on first save. You can include it to pre-configure print settings (see og4-special.md). If included, all required fields in `Oris.xml` must be present or `Oribos.Prints.IOC.Load` throws NullReferenceException.
+- **Include `Gara1/AtletiMD.xml`** even for single-day (empty `<atleti></atleti>`).
+- ZIP paths: no leading slash, no top-level folder prefix (`Progetto.xml`, not `EVENT/Progetto.xml`).
+
+### XML encoding
+
+All XML files: **UTF-8 BOM** (`\xef\xbb\xbf`) + `standalone="yes"` + **tab** indentation.
+
+### Gara.xml — required fields beyond the documented ones
+
+All these must be present or Oribos may crash/misbehave:
+
+`Uid` (any GUID), `FileModificato`, `QuotaIscrizione`, `CostoUguale`, `GriglieImpostate`, `Intervallo`, `RigaSportIdent`, `TempoSfasamentoPartenza` (00:00:00), `SfasamentoPositivo`, `T4` (= T3 initially), `UtilizzoTempoStartSportIdent`, `NumeroGiorno`, `OneManRelay`, `Valuta` (€), `Valuta2` (CHF), `AbilitaValuta2`, `CambioValuta`, `LinkBunner` (http://www.bostek.it), `ContPettorali`, `IntervalloPercorsi`, `NumeroRicevute`, `PercorsoCrono`, `UsaPuntoFinish`, `PuntoFinish` (200), `UsaUltimoPuntoFinish`, `UsaPuntoStart`, `PuntoStart` (200), `UsaPrimoPuntoStart`, `noleggi` (4 disabled slots), `statocrono`, `statomod`, `liveconfig` (with `RocEventId`=0, `RocUrl`).
+
+### Categorie.xml — required scoring fields
+
+Even with `TipoPunteggio=Nessuno`, each category needs: `PuntiPrimo` (100), `PuntiAltri` (1), `PuntiCategoria` (0), `Punti` (50 `<p>` entries: 25,20,18,17..1 then 30x1).
+
+### Percorsi.xml — extra rules
+
+- Include `<Kmsf>` (= Lunghezza/1000.0). `<N4>` = count of `<SequenzaPunti>` entries.
+- IOF XML import: **exclude CrossingPoint and Finish** from `<SequenzaPunti>`.
+- `<LanterneObbligatorie>` and `<PuntiScore>` must have exactly N4 entries.
+
+### Atleti.xml — minimum fields for new athletes
+
+Beyond the fields documented above, ensure:
+- `S2=PAR` (waiting for start), `T3=00:00:00` for punching-start races.
+- `P1=True` when `Q1=0` (free = already paid). Omit `<Sesso>` entirely (not `<Sesso />`) when unknown.
+- `TempoScarico=01/01/0001 00:00:00` for undownloaded chips.
+- Include empty `<CodicePunto />`, `<TempoSplit />`, and `<Noleggi>` with 4 False entries.

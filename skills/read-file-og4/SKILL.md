@@ -17,6 +17,7 @@ Also read [og4-special.md](og4-special.md) if:
 - The race is Score-O/Rogaining: `TipoGara=Score`
 - The project is MultiDays: `Progetto.xml` has `<Tipo>MultiDays</Tipo>`
 - One Man Relay: `OneManRelay=True` in `Gara.xml`
+- Working with print/display settings (`Oris/` directory)
 
 Read [og4-fields.md](og4-fields.md) when you need the full mapping of abbreviated XML field codes (M1, N3, T7, etc.) or the G1–G16 start grid parameters.
 
