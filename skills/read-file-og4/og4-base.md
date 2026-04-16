@@ -133,6 +133,30 @@ The per-athlete `<Noleggi>` field (in `Atleti.xml`) has one `<p>True/False</p>` 
 | `SportidentGriglia` | Clock-based start from grid, validated with SportIdent |
 | `Griglia` | Clock-based start from grid (no SportIdent start validation) |
 
+### Pre-computed start grid
+
+When generating a start grid externally (not via Oribos UI), set these fields consistently:
+
+**Gara.xml:**
+```xml
+<TipoGriglia>Griglia</TipoGriglia>
+<TipoTempoPartenza>Griglia</TipoTempoPartenza>   <!-- or SportidentGriglia if SI start unit used -->
+<GrigliaSalvata>True</GrigliaSalvata>
+<StatoGara>Griglie</StatoGara>
+```
+
+**Each athlete in Atleti.xml** must have all three grid fields populated:
+```xml
+<T3>00:32:00</T3>   <!-- start time relative to race T3 -->
+<T9>00:32:00</T9>   <!-- grid-assigned time — set equal to T3 -->
+<P9>7</P9>          <!-- 1-based position within the athlete's category -->
+```
+
+- `T3` and `T9` are always equal when the grid is pre-computed (they diverge only if an athlete is manually moved after grid generation).
+- `P9` is the athlete's rank within their own category grid (1 = first starter of that category), not a global slot number.
+- Multiple athletes from **different categories** may share the same `T3` (simultaneous start slots). This is valid — Oribos handles concurrent starters across categories.
+- `StatoGara` in **both** `Progetto.xml` and `Gara.xml` must be updated to `Griglie`.
+
 ### Time encoding
 
 All internal times (athlete T3, T1, T7, TempoSplit) are **relative to the race first start time** (Gara.xml `T3`). Example: if race T3=09:00:00 and an athlete's absolute start is 09:32:00, the athlete's T3 is stored as `00:32:00`. Absolute wall-clock times (T2, T4) are stored separately.
