@@ -64,7 +64,7 @@ Key fields:
 | `TipoTempoFine` | How finish time is determined: `SportIdent`, `ManualeCrono` |
 | `T3` | First start time (HH:MM:SS, absolute clock time) |
 | `T4` | First start time from SportIdent |
-| `TempoMassimo` | Time limit (HH:MM:SS) |
+| `TempoMassimo` | Time limit (HH:MM:SS). Default `03:00:00` |
 | `OneManRelay` | `True` if one-man relay format |
 | `GrigliaSalvata` | `True` if start grid has been generated |
 | `ContAtleti` | Total athlete count |
@@ -76,7 +76,7 @@ Key fields:
 | `Sistema` | Timing system: `SportIdent`, `Nessuno` |
 | `TipoPunteggio` | Points system: `Nessuno`, `Formula`, `TTFormula`, `GSS` |
 | `IntervalloPercorsi` | Interval between courses in minutes |
-| `RichiediNomeScarico` | `True` = always prompt for name/bib on every SI card download (useful for school events where the same cards are reused by different athletes across races) |
+| `RichiediNomeScarico` | `True` = always prompt for name/bib on every SI card download (useful for school events where the same cards are reused by different athletes across races) Default is  `False`, set only if the user request for it |
 | `RichiediNomeSoloNoleggio` | `True` = prompt only when downloading rented cards |
 
 ### SiCardNoleggio — Rental SI card pool

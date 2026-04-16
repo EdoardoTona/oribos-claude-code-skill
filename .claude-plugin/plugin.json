@@ -1,7 +1,7 @@
 {
   "name": "oribos",
   "description": "Support for Oribos orienteering competition management software. Adds knowledge of the OG4/OG3 file format (ZIP archives containing XML race data).",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "Edoardo Tona"
   }
