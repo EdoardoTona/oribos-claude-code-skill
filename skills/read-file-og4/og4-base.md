@@ -67,10 +67,10 @@ Key fields:
 | `TempoMassimo` | Time limit (HH:MM:SS). Default `03:00:00` |
 | `OneManRelay` | `True` if one-man relay format |
 | `GrigliaSalvata` | `True` if start grid has been generated |
-| `ContAtleti` | Total athlete count |
-| `ContCategorie` | Total category count |
-| `ContPercorsi` | Total course count |
-| `ContStaffette` | Relay team count (Staffetta only) |
+| `ContAtleti` | Next athlete `M1` allocator. Must be greater than every athlete `M1`; update it when adding athletes to avoid future ID conflicts. |
+| `ContCategorie` | Next category `M1` allocator. Must be greater than every category `M1`; update it when adding categories. |
+| `ContPercorsi` | Next course `M1` allocator. Must be greater than every course `M1`; update it when adding courses. |
+| `ContStaffette` | Next relay-team `M1` allocator (Staffetta only). Must be greater than every team `M1`; update it when adding teams. |
 | `PercorsiSportIdent` | Paths to `.ord` SportIdent files (Windows paths, informational) |
 | `puntiradio` | Radio control definitions: `<p n="54" d="54" />` (n=control code, d=label) |
 | `Sistema` | Timing system: `SportIdent`, `Nessuno` |
@@ -78,6 +78,8 @@ Key fields:
 | `IntervalloPercorsi` | Interval between courses in minutes |
 | `RichiediNomeScarico` | `True` = always prompt for name/bib on every SI card download (useful for school events where the same cards are reused by different athletes across races) Default is  `False`, set only if the user request for it |
 | `RichiediNomeSoloNoleggio` | `True` = prompt only when downloading rented cards |
+
+The `Cont*` fields are next-ID counters/high-water marks, not record counts. For each entity type, the matching counter in `Gara.xml` must always be greater than `max(M1)` in the corresponding XML file. When adding a record, assign `M1 = Cont*`, then increment that counter. Do not lower an existing counter to `max(M1)+1`; if the counter is not updated, Oribos may later reuse an existing internal ID and create conflicts.
 
 ### SiCardNoleggio — Rental SI card pool
 
@@ -168,7 +170,7 @@ All internal times (athlete T3, T1, T7, TempoSplit) are **relative to the race f
 ```xml
 <categorie>
   <categoria>
-    <M1>1</M1>                  <!-- Internal ID -->
+    <M1>1</M1>                  <!-- Internal ID; allocate from Gara.xml ContCategorie -->
     <N3>M21E</N3>               <!-- Full name -->
     <NomeBreve>M21E</NomeBreve> <!-- Short name -->
     <P2>Nero</P2>               <!-- Associated course name/ID -->
@@ -212,7 +214,7 @@ Defined in `Gara.xml`. Used to publish combined M+W results for the same course.
 ```xml
 <percorsi>
   <percorso>
-    <M1>1</M1>
+    <M1>1</M1>                  <!-- Internal ID; allocate from Gara.xml ContPercorsi -->
     <N3>Nero</N3>               <!-- Course name — also acts as ID, matches P2 in category/athlete -->
     <Lunghezza>5240</Lunghezza> <!-- Distance in metres -->
     <Dislivello>0</Dislivello>  <!-- Climb in metres -->
@@ -256,7 +258,7 @@ In staffette and one-man-relay, a separate course is created per athlete.
 <atleti>
   <atleta>
     <!-- Identity -->
-    <M1>15</M1>               <!-- Internal ID — MUST be unique across the file, never duplicated -->
+    <M1>15</M1>               <!-- Internal ID; allocate from Gara.xml ContAtleti; MUST be unique -->
     <P3>15</P3>               <!-- Bib number (may be duplicated for virtual/scratch entries) -->
     <N3>Mario</N3>            <!-- First name -->
     <Cognome>Rossi</Cognome>  <!-- Last name -->
@@ -394,6 +396,7 @@ Even with `TipoPunteggio=Nessuno`, each category needs: `PuntiPrimo` (100), `Pun
 ### Atleti.xml — minimum fields for new athletes
 
 Beyond the fields documented above, ensure:
+- Use `M1 = Gara.xml ContAtleti`, then increment `ContAtleti`. `ContAtleti` must remain greater than `max(M1)`; otherwise later Oribos inserts may reuse an existing internal ID and create conflicts.
 - `S2=PAR` (waiting for start), `T3=00:00:00` for punching-start races.
 - `P1=True` when `Q1=0` (free = already paid). Omit `<Sesso>` entirely (not `<Sesso />`) when unknown.
 - `TempoScarico=01/01/0001 00:00:00` for undownloaded chips.

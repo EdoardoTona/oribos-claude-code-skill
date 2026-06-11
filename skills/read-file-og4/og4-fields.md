@@ -34,7 +34,7 @@ All abbreviated codes used in Oribos XML files:
 | `G16` | GriglieNonSeparare               | Grid: do not separate                  |
 | `I1`  | ImportIOF                        | Imported from IOF XML                  |
 | `I2`  | ImportOOL                        | Imported from OOL                      |
-| `M1`  | MyId                             | Internal ID (unique, never duplicated) |
+| `M1`  | MyId                             | Internal ID; allocate from the matching `Gara.xml` `Cont*` counter |
 | `M2`  | Maschio                          | Male flag                              |
 | `N1`  | Nazione                          | Nationality (athlete, IOC code)        |
 | `N2`  | NazioneSocieta                   | Nationality (society)                  |

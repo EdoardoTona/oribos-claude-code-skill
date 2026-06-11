@@ -13,7 +13,7 @@ Supplement to `og4-base.md`. Load this file for: relay (Staffetta), Score-O/Roga
 ```xml
 <staffette>
   <sta>
-    <M1>761</M1>                        <!-- Team internal ID -->
+    <M1>761</M1>                        <!-- Team internal ID; allocate from Gara.xml ContStaffette -->
     <N3>G.S. MONTE GINER A.S.D. A</N3>  <!-- Team name -->
     <P3>67</P3>                         <!-- Team bib number -->
     <T7>03:09:13</T7>                   <!-- Total team time -->
@@ -29,6 +29,8 @@ Supplement to `og4-base.md`. Load this file for: relay (Staffetta), Score-O/Roga
   </sta>
 </staffette>
 ```
+
+`ContStaffette` in `Gara.xml` is the next team `M1` allocator, not the team count. It must remain greater than `max(M1)` in `Staffette.xml`; assign the current `ContStaffette` to a new team and increment it to avoid future ID conflicts.
 
 Each athlete in `Atleti.xml` has:
 - `F1` = leg number (Frazione), 1-based
@@ -120,7 +122,7 @@ Highest `P7` wins. Tiebreak: lower `T7` (faster time).
 <atleti>
   <atleta>
     <MyAtletaId>2781</MyAtletaId>  <!-- Links to M1 in Gara0/Atleti.xml -->
-    <M1>1352</M1>                   <!-- Stage-local ID (unique within this stage) -->
+    <M1>1352</M1>                   <!-- Stage-local ID; allocate from this stage's Gara.xml ContAtleti -->
     <S2>CLA</S2>
     <T3>00:20:00</T3>
     <T1>00:56:29</T1>
@@ -129,6 +131,8 @@ Highest `P7` wins. Tiebreak: lower `T7` (faster time).
   </atleta>
 </atleti>
 ```
+
+For `AtletiMD.xml`, the stage-local `M1` values use that stage's `Gara.xml` `ContAtleti` counter. Keep `ContAtleti` greater than `max(M1)` across the stage athlete/result records and increment it after adding records; stale counters can cause later ID conflicts.
 
 - `Atleti.xml`: full athlete records for walk-in entries (DIRECT, Esordienti, etc.) who are **not** in the overall classification. These athletes do not appear in `Gara0/Atleti.xml`.
 
