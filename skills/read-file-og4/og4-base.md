@@ -159,6 +159,14 @@ When generating a start grid externally (not via Oribos UI), set these fields co
 - Multiple athletes from **different categories** may share the same `T3` (simultaneous start slots). This is valid — Oribos handles concurrent starters across categories.
 - `StatoGara` in **both** `Progetto.xml` and `Gara.xml` must be updated to `Griglie`.
 
+### Vacant / `{Libero}` start slots
+
+Reserved empty start slots are stored as athlete records in `Atleti.xml`, not as separate grid objects. The distinguishing flag is `<V1>True</V1>` (`Vacante`); the name convention is `Cognome={Libero}` with empty `N3`, but do not rely on the name alone.
+
+Vacant records still need a unique `M1` allocated from `ContAtleti`, a category (`C1`), and the grid fields used by the event (commonly `T3` for the reserved start time and `P9` for the category grid position). They usually contain minimal/fake identity data such as `C3=0`, `S3=Senza Società`, empty `P2`, empty punch/split lists, and no SI card. Normal athletes usually omit `V1`; absence means not vacant.
+
+When assigning a last-minute real athlete to a reserved slot, reuse the vacant record's `M1` and grid time, replace the fake identity fields, and remove `<V1>True</V1>`/`{Libero}` so Oribos no longer treats it as a vacant slot.
+
 ### Time encoding
 
 All internal times (athlete T3, T1, T7, TempoSplit) are **relative to the race first start time** (Gara.xml `T3`). Example: if race T3=09:00:00 and an athlete's absolute start is 09:32:00, the athlete's T3 is stored as `00:32:00`. Absolute wall-clock times (T2, T4) are stored separately.

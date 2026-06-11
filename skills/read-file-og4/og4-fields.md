@@ -70,7 +70,7 @@ All abbreviated codes used in Oribos XML files:
 | `T10` | TempoAttraversamenti             | Passage times                          |
 | `T11` | TempoPenalita                    | Penalty time                           |
 | `T12` | TempoAbbuono                     | Time bonus                             |
-| `V1`  | Vacante                          | Vacant start slot                      |
+| `V1`  | Vacante                          | Vacant/libero start slot flag (`True` on `{Libero}` athlete records) |
 
 ---
 

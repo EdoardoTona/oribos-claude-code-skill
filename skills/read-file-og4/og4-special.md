@@ -114,6 +114,8 @@ Highest `P7` wins. Tiebreak: lower `T7` (faster time).
 - `AtletiMD.xml`: empty at this level.
 - `Gara.xml`: overall event settings (date range, scoring formula, etc.).
 
+Vacant start-slot records can also appear in `Gara0/Atleti.xml` with `V1=True` and `Cognome={Libero}`. Their `Iscrizioni` list identifies the stages where the placeholder is entered; use the `V1` flag, not the name alone, to recognize them.
+
 ### GaraN (each stage)
 
 - `AtletiMD.xml`: result data for athletes in the overall classification. Each entry links to the master record via `MyAtletaId`:
