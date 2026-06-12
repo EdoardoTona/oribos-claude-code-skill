@@ -6,7 +6,7 @@ user-invocable: false
 
 ## OG4/OG3 — Competition files
 
-`.og4` and `.og3` files are ZIP archives containing XML. Unzip to a temp directory, then parse the XML files inside. The extension is the only difference between og3 and og4 — the internal format is identical.
+`.og4` and `.og3` files are ZIP archives containing XML. Unzip to a temp directory, then parse the XML files inside. The extension is the only difference between og3 and og4 — the internal format is identical. Very old `.og3` files (saved by old Oribos versions, ~2012-2013) may lack newer files and fields (e.g. `AtletiMD.xml`, live config) and can even violate the `Cont*` counter invariant.
 
 When Oribos has a file open it creates a `.lock` file alongside it.
 
@@ -15,6 +15,7 @@ Always read [og4-base.md](og4-base.md) first — it covers the archive structure
 Also read [og4-special.md](og4-special.md) if:
 - The race is a relay: `TipoGara=Staffetta`
 - The race is Score-O/Rogaining: `TipoGara=Score`
+- The race is Trail-O (TempO/PreO): `TipoGara=Trail` or `TrailMode` in `Gara.xml`
 - The project is MultiDays: `Progetto.xml` has `<Tipo>MultiDays</Tipo>`
 - One Man Relay: `OneManRelay=True` in `Gara.xml`
 - Working with print/display settings (`Oris/` directory)

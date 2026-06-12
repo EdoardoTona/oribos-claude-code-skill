@@ -1,6 +1,6 @@
 # Oribos OG4/OG3 — Special Race Types & Oris Print Settings
 
-Supplement to `og4-base.md`. Load this file for: relay (Staffetta), Score-O/Rogaining, MultiDays, One Man Relay, or Oris print configuration.
+Supplement to `og4-base.md`. Load this file for: relay (Staffetta), Score-O/Rogaining, MultiDays, One Man Relay, Trail-O (TempO/PreO), or Oris print configuration.
 
 ---
 
@@ -37,8 +37,14 @@ Each athlete in `Atleti.xml` has:
 - `P2` = course name + fork code (e.g. `M E_BBCAB`)
 - `C1` = category name
 - `T3` absent or 00:00:00 for legs 2+ (chase start, time carried from previous leg)
+- `StaffettaLancio=True` when the leg started in a mass launch (restart for late legs) instead of the chase start
 
 The number of legs per team is defined by `<Frazionisti>` in the category.
+
+Relay-specific category fields:
+- `<TempoLancio>`: mass-start (launch) time of the category, relative to race `T3` (different categories can be launched at different times, e.g. `00:03:00`).
+- `<Percorsi>`: list of every leg+fork course variant available to the category (e.g. `M 13_1AA` ... `M 13_3CC`). For non-relay categories in the same event it usually repeats the single course name.
+- `<OffsetPartenza>`: start offset (`HH:MM:SS`) observed on individual-start categories hosted inside a relay event.
 
 ### Fork codes
 
@@ -81,13 +87,13 @@ Athletes visit any subset of controls in any order within a time limit.
 - `SequenzaPunti`: all available controls (order not meaningful for athletes, but defines the index used in `PuntoPunzonato`).
 - `PuntiScore`: points value for each control, parallel to `SequenzaPunti`.
 - `LanterneObbligatorie`: True = this control is mandatory.
-- `UtilizzoTempoLimite=True`, `Penalita=N`: N points deducted per minute over `TempoMassimo`.
+- `UtilizzoTempoLimite=True`, `TempoLimite=HH:MM:SS`, `Penalita=N`: N points deducted per minute over the **course-level** `TempoLimite` (e.g. `00:30:00`); the race-level `TempoMassimo` is the fallback when no course limit is set.
 
 ### Athlete result (Atleti.xml)
 
 - `PuntoPunzonato`: list of True/False, one per control in `SequenzaPunti`. True = athlete visited that control.
 - `P7` (PuntiTotali): final score = sum of `PuntiScore` for visited controls − time penalty.
-  - Time penalty = `Penalita × minutes_over_limit` (rounded down to whole minutes).
+  - Time penalty = `Penalita × minutes_over_limit` (rounded down to whole minutes; limit = course `TempoLimite`, else `TempoMassimo`).
   - `P7` can be negative if heavily over time.
 - `CodicePunto` and `TempoSplit` are **not used** in Score-O.
 - `T3` absent = athlete starts at race first start (00:00:00 relative).
@@ -96,6 +102,49 @@ Athletes visit any subset of controls in any order within a time limit.
 ### Ranking
 
 Highest `P7` wins. Tiebreak: lower `T7` (faster time).
+
+---
+
+## Trail-O (TempO / PreO)
+
+`TipoGara=Trail` with `TrailMode` in `Gara.xml` (observed: `TempO`). Athletes answer flag-identification questions at stations instead of (or in addition to) punching. Note: merged/overall Trail-O files may also appear as `TipoGara=Normale` with Trail data on the athletes.
+
+### Gara.xml settings
+
+| Field | Description |
+|---|---|
+| `TrailMode` | Trail-O discipline, e.g. `TempO` |
+| `TempoTrailMAX` | Maximum answer time per station, in seconds (e.g. 30) |
+| `PenalitaTrailERR` | Penalty seconds added per wrong answer (e.g. 30) |
+| `TrailTempoLimiteStaffettaAtleta` | Per-athlete time limit in trail relay |
+
+### Course stations (Percorsi.xml)
+
+`<PuntiTrail>` holds one `<Punto>` per station:
+
+```xml
+<PuntiTrail>
+  <Punto>
+    <ATempo>True</ATempo>      <!-- timed station (TempO) -->
+    <Corretto>ZZCBE</Corretto> <!-- correct answers, one letter per task; Z = "zero"/no flag -->
+    <Range>AF</Range>          <!-- answer options span (A..F) -->
+    <N3>T1</N3>                <!-- station name -->
+  </Punto>
+</PuntiTrail>
+```
+
+### Athlete answers (Atleti.xml)
+
+`<Trail>` holds one `<p>` per station, parallel to `PuntiTrail`:
+
+```xml
+<Trail>
+  <p><Tempo>370</Tempo><Risposta>AZEZB</Risposta></p>  <!-- Tempo in centiseconds (370 = 3.7 s); Risposta = given answers, one letter per task -->
+  <p />                                                 <!-- empty = station not (yet) answered -->
+</Trail>
+```
+
+`MaxTrail` on a category limits the number of stations counted for that category.
 
 ---
 
@@ -121,6 +170,8 @@ Highest `P7` wins. Tiebreak: lower `T7` (faster time).
 | `GareScarto` | Number of worst stages to drop from the overall (drop-worst-N); `0` = count all stages |
 | `TCPClientConfig` | Live-timing TCP reader frame template, e.g. `{CODE:2}{CARD:4}{HH:2}{MM:2}{SS:2}{D:1}` — token:width pairs describing how to parse each packet from the SI reader |
 | `nolextra` | Extra rental slots, same structure as `noleggi` (`Q1`/`Abilita`/`Descrizione`) |
+
+Every athlete in `Gara0/Atleti.xml` carries an `<Iscrizioni>` list with the stage numbers they are entered in (e.g. `<p>1</p><p>4</p>` = stages 1 and 4 only). Athletes entered in all stages have the full explicit list (`1,2,3,4,5`); a missing `<Iscrizioni>` is rare — do **not** assume it means "all stages".
 
 Vacant start-slot records can also appear in `Gara0/Atleti.xml` with `V1=True` and `Cognome={Libero}`. Their `Iscrizioni` list identifies the stages where the placeholder is entered; use the `V1` flag, not the name alone, to recognize them.
 

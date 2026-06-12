@@ -10,8 +10,8 @@
     {
       "name": "oribos",
       "source": "./",
-      "description": "Adds knowledge of the OG4/OG3 file format (ZIP archives containing XML race data). Claude automatically loads the skill when working with .og4 or .og3 files.",
-      "version": "1.3.1",
+      "description": "Adds knowledge of the OG4/OG3 file format (ZIP archives containing XML race data) and a start-list skill that builds fair start grid proposals as CSV. Claude automatically loads the skills when working with .og4/.og3 files or start lists.",
+      "version": "1.5.0",
       "author": {
         "name": "Edoardo Tona"
       }

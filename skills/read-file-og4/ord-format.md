@@ -144,7 +144,7 @@ Each `<SplitTime>` records one control punch, in the order stored on the chip.
 | Aspect | .og4 (Atleti.xml) | .ord |
 |---|---|---|
 | Format | ZIP archive with multiple XML files | Single plain XML file |
-| Times | Encoded as integer centiseconds | Human-readable `HH.MM.SS` format |
+| Times | `HH:MM:SS` strings, relative to the race first start | Absolute wall-clock `HH.MM.SS` (dots) |
 | Athlete data | Full (name, club, category, bib, etc.) | Only chip number + what's resolved at read time |
 | Split times | Validated against course order | Raw chip order (as punched) |
 | Purpose | Competition management & results | Raw chip download log |

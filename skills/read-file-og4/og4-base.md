@@ -60,7 +60,7 @@ Key fields:
 | `Luogo` | Location |
 | `DataGara` | Date (MM/DD/YYYY HH:MM:SS) |
 | `StatoGara` | Race state (see below) |
-| `TipoGara` | Race type: `Normale`, `Staffetta`, `Score` |
+| `TipoGara` | Race type: `Normale`, `Staffetta`, `Score`, `Trail` (Trail-O, see og4-special.md) |
 | `TipoGriglia` | Start list type: `Nessuna`, `Griglia`, `Lancio` |
 | `TipoTempoPartenza` | How start time is determined (see below) |
 | `TipoTempoFine` | How finish time is determined: `SportIdent`, `ManualeCrono` |
@@ -77,12 +77,24 @@ Key fields:
 | `ricevute` | Issued payment receipts. Each `<ricevuta>`: `Numero` (receipt no.), `Tipo` (`Societa`/...), `Id`, `N3` (payer name), `N1` (nationality), `Q1` (amount), `Annullata` (cancelled flag). Empty `<ricevute />` when none |
 | `puntiradio` | Radio control definitions: `<p n="54" d="54" />` (n=control code, d=label) |
 | `Sistema` | Timing system: `SportIdent`, `Nessuno` |
-| `TipoPunteggio` | Points system: `Nessuno`, `Formula`, `TTFormula`, `GSS` |
+| `TipoPunteggio` | Points system: `Nessuno`, `Formula`, `TTFormula`, `GSS`, `Fisso`, `TourTrev` |
 | `IntervalloPercorsi` | Interval between courses in minutes |
 | `RichiediNomeScarico` | `True` = always prompt for name/bib on every SI card download (useful for school events where the same cards are reused by different athletes across races) Default is  `False`, set only if the user request for it |
 | `RichiediNomeSoloNoleggio` | `True` = prompt only when downloading rented cards |
 
-The `Cont*` fields are next-ID counters/high-water marks, not record counts. For each entity type, the matching counter in `Gara.xml` must always be greater than `max(M1)` in the corresponding XML file. When adding a record, assign `M1 = Cont*`, then increment that counter. Do not lower an existing counter to `max(M1)+1`; if the counter is not updated, Oribos may later reuse an existing internal ID and create conflicts.
+The `Cont*` fields are next-ID counters/high-water marks, not record counts. For each entity type, the matching counter in `Gara.xml` must always be greater than `max(M1)` in the corresponding XML file. When adding a record, assign `M1 = Cont*`, then increment that counter. Do not lower an existing counter to `max(M1)+1`; if the counter is not updated, Oribos may later reuse an existing internal ID and create conflicts. Old files can already violate this invariant (e.g. a 2013 file with `ContAtleti` < `max(M1)`); before adding records to such a file, first raise the counter above `max(M1)`.
+
+### Other Gara.xml fields seen in real files
+
+| Field | Description |
+|---|---|
+| `LiveEvent` | Live-publishing event ID (numeric) |
+| `FSLivePassword` | Encrypted password for live publishing |
+| `ImportaDecimi` | `True` = import tenths of a second from SI readouts |
+| `StazioniNonFunzionanti` | List of control codes marked as out of order (punches there are excused) |
+| `PercorsoIscrizioni` | Local path to the entries folder (informational, machine-specific) |
+| `Noleggi` (capital N) | Serialization artifact (`Oribos.Engine.Dati.DatiNoleggio[]`) — ignore; the real data is in lowercase `noleggi` |
+| `TrailMode`, `TempoTrailMAX`, `PenalitaTrailERR` | Trail-O settings (see og4-special.md) |
 
 ### SiCardNoleggio — Rental SI card pool
 
@@ -208,6 +220,19 @@ All internal times (athlete T3, T1, T7, TempoSplit) are **relative to the race f
 
 `P2` is the course name/ID. In staffette and one-man-relay, the course is set per-athlete instead.
 
+### Additional category fields seen in real files
+
+| Field | Description |
+|---|---|
+| `Partenza` | Start point number assigned to the category when the event uses multiple physical starts (absent = first/default start) |
+| `PosGriglia` | Category position/order used when generating the start grid |
+| `OffsetPartenza` | Category start offset as `HH:MM:SS` (observed on individual-start categories inside relay events; elsewhere the offset is `Ora`/`Min`) |
+| `TempoLancio` | Mass-start (lancio) time for the category, relative to race `T3` (relay/`Lancio` races) |
+| `Percorsi` | List of course names available to the category. For relay categories it lists every leg+fork variant (e.g. `M 13_1AA`, `M 13_2BC`, ...); for normal categories it usually repeats the single course |
+| `Femminile` | Legacy female flag (rare; prefer `Sesso`) |
+| `alert` | Per-category alert configuration (`<times/>`, `<codes/>`), used for announcer/radio alerts |
+| `MaxTrail` | Trail-O: maximum stations for the category (see og4-special.md) |
+
 ### Start interval and first start time
 
 - **Start interval** between consecutive athletes in a category is stored per-category as `<Intervallo>` (in **minutes**). This is the field Oribos actually writes; the `G6`/`G7`/`G8` grid codes (see og4-fields.md) are UI-side grid-generation parameters and may be absent from a saved file.
@@ -259,12 +284,15 @@ Defined in `Gara.xml`. Used to publish combined M+W results for the same course.
     </PuntiScore>
     <!-- Score-O only: -->
     <UtilizzoTempoLimite>True</UtilizzoTempoLimite>
+    <TempoLimite>00:30:00</TempoLimite>  <!-- Per-course time limit (the operative limit for Score-O) -->
     <Penalita>10</Penalita>     <!-- Points deducted per minute over time limit -->
   </percorso>
 </percorsi>
 ```
 
-**Important:** The last entry in `SequenzaPunti` is the last **control** before the finish chute, not the finish line itself (typically code 100 or 200). The race time `T7` includes the run-in from that last control to the actual finish — typically 13–24 seconds. Split times in `TempoSplit` cover up to the last control punch only; `T7 - lastSplit = run-in time`.
+Rare/legacy course fields seen in old files: `MinPartenza` (numeric, semantics unconfirmed), `Pettorali` (list of bib numbers, observed in old relay files — apparently the first bib of each leg block; unconfirmed), `PuntiTrail` (Trail-O stations, see og4-special.md).
+
+**Important:** The last entry in `SequenzaPunti` is the last **control** before the finish chute, not the finish line itself (typically code 100 or 200). The race time `T7` includes the run-in from that last control to the actual finish — commonly 10-60 seconds (median ~20-35 s across real events), occasionally a few minutes on long run-ins. Split times in `TempoSplit` cover up to the last control punch only; `T7 - lastSplit = run-in time`.
 
 ### Populating SequenzaPunti from IOF XML 3.0
 
@@ -366,6 +394,25 @@ In staffette and one-man-relay, a separate course is created per athlete.
 </atleti>
 ```
 
+### Other athlete fields seen in real files
+
+| Field | Description |
+|---|---|
+| `ModGriglia` | Athlete's start-time request used by grid generation: `Presto` (early) / `Tardi` (late) |
+| `SiCard2` | Second SI card number (athlete carrying two chips) |
+| `SiCardOld`, `SiCard2Old` | Previous SI card numbers after a chip change |
+| `TempoCheck` | Check-station punch time |
+| `GPS` | GPS tracker number assigned to the athlete |
+| `Telefono` | Phone number |
+| `RFID` | RFID tag number (0 = none) |
+| `Fotofinish` | Photo-finish reference (numeric) |
+| `BatteryDate2`, `BatteryVolt2` | Battery info of the second SI card |
+| `Iscrizioni` | MultiDays: list of stage numbers the athlete is entered in (see og4-special.md) |
+| `StaffettaLancio` | Relay: `True` when the leg started in the mass launch (restart) instead of chase start |
+| `Trail` | Trail-O answers (see og4-special.md) |
+| `SoloFinish`, `ImportFinish` | Finish-only timing / imported finish flags (semantics unconfirmed) |
+| `G1` | GSS individual flag (school events) |
+
 ### P3 — Bib number uniqueness
 
 The bib number `P3` should be **unique within a race**. Oribos does not enforce this at the file level — duplicates can exist for virtual/scratch entries or vacant slots — but real classified athletes are expected to have distinct bibs, and SI-card download/lookup by bib relies on it. When adding or editing athletes, assign each a bib not already used by another classified athlete in the same `Gara*/Atleti.xml`. (Note: `P3` differs from the internal ID `M1`, which **must** be unique; `P3` is the human-facing race number.)
@@ -404,7 +451,7 @@ Rules to produce a file Oribos opens without errors. Violations cause silent fai
 ### Archive rules
 
 - **`Oris/` directory is optional** — Oribos creates it with defaults on first save. You can include it to pre-configure print settings (see og4-special.md). If included, all required fields in `Oris.xml` must be present or `Oribos.Prints.IOC.Load` throws NullReferenceException.
-- **Include `Gara1/AtletiMD.xml`** even for single-day (empty `<atleti></atleti>`).
+- **Include `Gara1/AtletiMD.xml`** even for single-day (empty `<atleti></atleti>`). (When *reading*, note that very old `.og3` files — 2012-2013 — may lack `AtletiMD.xml` entirely.)
 - ZIP paths: no leading slash, no top-level folder prefix (`Progetto.xml`, not `EVENT/Progetto.xml`).
 
 ### XML encoding
@@ -419,11 +466,11 @@ All these must be present or Oribos may crash/misbehave:
 
 ### Categorie.xml — required scoring fields
 
-Even with `TipoPunteggio=Nessuno`, each category needs: `PuntiPrimo` (100), `PuntiAltri` (1), `PuntiCategoria` (0), `Punti` (50 `<p>` entries: 25,20,18,17..1 then 30x1).
+Even with `TipoPunteggio=Nessuno`, each category needs: `PuntiPrimo` (100), `PuntiAltri` (1), `PuntiCategoria` (0), `Punti` (60 `<p>` entries: 25,20,18,17,16,...,2,1 — 20 values — then 40 more `1`s; real files consistently have 60 entries).
 
 ### Percorsi.xml — extra rules
 
-- Include `<Kmsf>` (= Lunghezza/1000.0). `<N4>` = count of `<SequenzaPunti>` entries.
+- Include `<Kmsf>` = Lunghezza/1000 + Dislivello/100 (km-effort; all real files match this formula). `<N4>` = count of `<SequenzaPunti>` entries.
 - IOF XML import: **exclude CrossingPoint and Finish** from `<SequenzaPunti>`.
 - `<LanterneObbligatorie>` and `<PuntiScore>` must have exactly N4 entries.
 

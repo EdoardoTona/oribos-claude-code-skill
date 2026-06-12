@@ -31,7 +31,7 @@ All abbreviated codes used in Oribos XML files:
 | `G13` | GriglieUsaListaBase              | Grid: use base entry list              |
 | `G14` | GriglieListaBaseOrdineinverso    | Grid: reverse base list order          |
 | `G15` | GriglieSeparaAtletiSoc           | Grid: separate athletes from same club |
-| `G16` | GriglieNonSeparare               | Grid: do not separate                  |
+| `G16` | GriglieNonSeparare               | Grid: club-separation threshold (see G-codes table) |
 | `I1`  | ImportIOF                        | Imported from IOF XML                  |
 | `I2`  | ImportOOL                        | Imported from OOL                      |
 | `M1`  | MyId                             | Internal ID; allocate from the matching `Gara.xml` `Cont*` counter |
@@ -76,7 +76,7 @@ All abbreviated codes used in Oribos XML files:
 
 ## Start Grid Parameters (G-codes)
 
-The G-codes appear as XML elements on category records and control how Oribos generates the start grid:
+The G-codes control how Oribos generates the start grid. In saved files they appear as race-level XML elements in `Gara.xml` (e.g. `G13`, `G16`, `G4`, `G7` observed there in real events); only a subset may be present:
 
 | Code  | Full name                        | Meaning                                                 |
 | ----- | -------------------------------- | ------------------------------------------------------- |
@@ -94,7 +94,7 @@ The G-codes appear as XML elements on category records and control how Oribos ge
 | `G13` | GriglieUsaListaBase              | Use the base entry list order for seeding               |
 | `G14` | GriglieListaBaseOrdineinverso    | Reverse the base list order                             |
 | `G15` | GriglieSeparaAtletiSoc           | Separate athletes from the same club                    |
-| `G16` | GriglieNonSeparare               | Do not apply club separation                            |
+| `G16` | GriglieNonSeparare               | Numeric threshold: do not attempt same-club separation when there are fewer than this many athletes (observed values 3-4) |
 
 ### Persisted per-category fields vs. G-codes
 
