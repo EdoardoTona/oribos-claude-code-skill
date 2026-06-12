@@ -112,7 +112,15 @@ Highest `P7` wins. Tiebreak: lower `T7` (faster time).
 
 - `Atleti.xml`: master list with full personal data (name, club, category, SI card, etc.) for all athletes in the overall classification.
 - `AtletiMD.xml`: empty at this level.
-- `Gara.xml`: overall event settings (date range, scoring formula, etc.).
+- `Gara.xml`: overall event settings (date range, scoring formula, etc.). Fields specific to the overall race (some only appear in `Gara0`):
+
+| Field | Description |
+|---|---|
+| `DataGara` / `DataGaraFine` | Event start / end date (the multi-day span) |
+| `DefaultClassifica` | Overall classification type. `ATempo` = sum of stage times (other point-based modes exist) |
+| `GareScarto` | Number of worst stages to drop from the overall (drop-worst-N); `0` = count all stages |
+| `TCPClientConfig` | Live-timing TCP reader frame template, e.g. `{CODE:2}{CARD:4}{HH:2}{MM:2}{SS:2}{D:1}` — token:width pairs describing how to parse each packet from the SI reader |
+| `nolextra` | Extra rental slots, same structure as `noleggi` (`Q1`/`Abilita`/`Descrizione`) |
 
 Vacant start-slot records can also appear in `Gara0/Atleti.xml` with `V1=True` and `Cognome={Libero}`. Their `Iscrizioni` list identifies the stages where the placeholder is entered; use the `V1` flag, not the name alone, to recognize them.
 

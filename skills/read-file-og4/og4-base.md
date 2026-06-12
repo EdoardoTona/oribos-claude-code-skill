@@ -39,6 +39,8 @@ MyEvent.og4
     </gara>
     ...
   </gare>
+  <ContGare>150</ContGare>         <!-- Next-ID counter / high-water mark for race IDs (like the Cont* fields in Gara.xml) -->
+  <MostraErroreCopia>False</MostraErroreCopia>  <!-- UI flag: show copy-error warning -->
 </progetto>
 ```
 
@@ -71,7 +73,8 @@ Key fields:
 | `ContCategorie` | Next category `M1` allocator. Must be greater than every category `M1`; update it when adding categories. |
 | `ContPercorsi` | Next course `M1` allocator. Must be greater than every course `M1`; update it when adding courses. |
 | `ContStaffette` | Next relay-team `M1` allocator (Staffetta only). Must be greater than every team `M1`; update it when adding teams. |
-| `PercorsiSportIdent` | Paths to `.ord` SportIdent files (Windows paths, informational) |
+| `PercorsiSportIdent` | Paths to `.ord` SportIdent files. Each `<c f="..." v="N" />` entry: `f`=file path (Windows, informational), `v`=file format version |
+| `ricevute` | Issued payment receipts. Each `<ricevuta>`: `Numero` (receipt no.), `Tipo` (`Societa`/...), `Id`, `N3` (payer name), `N1` (nationality), `Q1` (amount), `Annullata` (cancelled flag). Empty `<ricevute />` when none |
 | `puntiradio` | Radio control definitions: `<p n="54" d="54" />` (n=control code, d=label) |
 | `Sistema` | Timing system: `SportIdent`, `Nessuno` |
 | `TipoPunteggio` | Points system: `Nessuno`, `Formula`, `TTFormula`, `GSS` |
@@ -183,9 +186,17 @@ All internal times (athlete T3, T1, T7, TempoSplit) are **relative to the race f
     <NomeBreve>M21E</NomeBreve> <!-- Short name -->
     <P2>Nero</P2>               <!-- Associated course name/ID -->
     <Q1>15</Q1>                 <!-- Entry fee -->
+    <Ora>1</Ora>                <!-- First-start HOURS offset for this category (often omitted = 0) -->
+    <Min>2</Min>                <!-- First-start MINUTES offset for this category (often omitted = 0) -->
+    <Intervallo>2</Intervallo>  <!-- Start interval between athletes, in MINUTES -->
+    <VacantiFine>1</VacantiFine> <!-- Vacant (empty) start slots appended at end of category -->
     <Classifica>True</Classifica>
     <PartenzaLibera>True</PartenzaLibera>  <!-- Punching start if True -->
     <Sesso>M</Sesso>            <!-- M or F (absent = unisex) -->
+    <EtaMin>35</EtaMin>         <!-- Minimum age for the category (master classes: M35, M40, ...) -->
+    <EtaMax>18</EtaMax>         <!-- Maximum age for the category (youth classes: M18, M16, ...) -->
+    <Agonista>True</Agonista>   <!-- Competitive (non-recreational) category -->
+    <ListaBase>WRE M</ListaBase> <!-- Base seeding list used to order the start grid (e.g. world ranking); only on elite classes -->
     <Ludico>True</Ludico>       <!-- Present and True = recreational category -->
     <Frazionisti>3</Frazionisti> <!-- Number of relay legs (Staffetta only) -->
     <Punti>                     <!-- Points awarded by finishing position -->
@@ -196,6 +207,14 @@ All internal times (athlete T3, T1, T7, TempoSplit) are **relative to the race f
 ```
 
 `P2` is the course name/ID. In staffette and one-man-relay, the course is set per-athlete instead.
+
+### Start interval and first start time
+
+- **Start interval** between consecutive athletes in a category is stored per-category as `<Intervallo>` (in **minutes**). This is the field Oribos actually writes; the `G6`/`G7`/`G8` grid codes (see og4-fields.md) are UI-side grid-generation parameters and may be absent from a saved file.
+- **First start time per category** is stored as the **offset** `<Ora>` (hours) + `<Min>` (minutes), relative to the race-level `Gara.xml` `T3`. Either tag is omitted when zero (so a category with no `<Ora>`/`<Min>` starts at the race `T3`). Example: race `T3`=10:00:00 with `<Ora>1</Ora><Min>2</Min>` → that category's first start is **11:02:00**.
+- The **absolute first start of the whole race** is `Gara.xml` `T3`. All athlete `T3`/`T9` times are relative to it.
+
+> Note: the category's configured first start (`Ora`/`Min`) is the *intended* slot. The first **actual** athlete may start later if the leading grid slots are vacant/unassigned, so don't assume `min(athlete T9) == Ora*60+Min`. Read `Ora`/`Min` for the planned first start; derive from the grid only for the realised one.
 
 ### Accorpate (merged categories for results publishing)
 
@@ -267,7 +286,7 @@ In staffette and one-man-relay, a separate course is created per athlete.
   <atleta>
     <!-- Identity -->
     <M1>15</M1>               <!-- Internal ID; allocate from Gara.xml ContAtleti; MUST be unique -->
-    <P3>15</P3>               <!-- Bib number (may be duplicated for virtual/scratch entries) -->
+    <P3>15</P3>               <!-- Bib number — should be unique within the race (see note below) -->
     <N3>Mario</N3>            <!-- First name -->
     <Cognome>Rossi</Cognome>  <!-- Last name -->
     <D1>03/28/1981 00:00:00</D1>  <!-- Date of birth (MM/DD/YYYY) -->
@@ -317,6 +336,9 @@ In staffette and one-man-relay, a separate course is created per athlete.
     <I1>True</I1>             <!-- Imported from IOF -->
     <TempoScarico>01/25/2026 11:08:35</TempoScarico>  <!-- SI download timestamp -->
     <NoteAuto>Manca 83</NoteAuto>  <!-- Auto-generated note (e.g. missing control) -->
+    <Note>see split times</Note>   <!-- Free-text manual note (operator-entered; vs auto NoteAuto) -->
+    <BatteryDate1>22-10-26</BatteryDate1>  <!-- SI-card battery date (YY-MM-DD), read from chip on download -->
+    <BatteryVolt1>2.98</BatteryVolt1>      <!-- SI-card battery voltage (Volts), read from chip on download -->
 
     <!-- Control punches (standard orienteering): -->
     <CodicePunto>             <!-- Control codes as actually punched, in order -->
@@ -343,6 +365,10 @@ In staffette and one-man-relay, a separate course is created per athlete.
   </atleta>
 </atleti>
 ```
+
+### P3 — Bib number uniqueness
+
+The bib number `P3` should be **unique within a race**. Oribos does not enforce this at the file level — duplicates can exist for virtual/scratch entries or vacant slots — but real classified athletes are expected to have distinct bibs, and SI-card download/lookup by bib relies on it. When adding or editing athletes, assign each a bib not already used by another classified athlete in the same `Gara*/Atleti.xml`. (Note: `P3` differs from the internal ID `M1`, which **must** be unique; `P3` is the human-facing race number.)
 
 ### S2 — Status values
 

@@ -95,3 +95,16 @@ The G-codes appear as XML elements on category records and control how Oribos ge
 | `G14` | GriglieListaBaseOrdineinverso    | Reverse the base list order                             |
 | `G15` | GriglieSeparaAtletiSoc           | Separate athletes from the same club                    |
 | `G16` | GriglieNonSeparare               | Do not apply club separation                            |
+
+### Persisted per-category fields vs. G-codes
+
+The G-codes above are the grid-generation **settings** as exposed in the Oribos UI. In a saved `.og4`, the per-category values that actually drive the grid are usually written with their plain Italian element names, and the G-codes may be absent entirely:
+
+| Element            | Equivalent G-code | Meaning                                              |
+| ------------------ | ----------------- | ---------------------------------------------------- |
+| `<Ora>`            | —                 | First-start **hours** offset for the category (rel. to race `T3`); omitted when 0 |
+| `<Min>`            | —                 | First-start **minutes** offset for the category (rel. to race `T3`); omitted when 0 |
+| `<Intervallo>`     | `G7`              | Start interval for this category, in **minutes**     |
+| `<VacantiFine>`    | `G4`              | Vacant (empty) start slots appended at end of category |
+
+When reading interval / first-start / vacant-slot info from a real file, check `<Ora>`+`<Min>`, `<Intervallo>` and `<VacantiFine>` on each `<categoria>` first; fall back to the `G*` codes only if present. The category first start is the offset `<Ora>`*60+`<Min>` added to the race-level `Gara.xml` `T3` (see og4-base.md). The race-wide first start is `T3` itself.
