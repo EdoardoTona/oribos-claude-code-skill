@@ -16,6 +16,7 @@ description: Create fair orienteering start list proposals as CSV files from ath
    - Free-start categories. Always ask; common examples are Beginners, M/W10, M/W12, Direct.
    - Vacant policy. Ask case by case for free-start categories. For grid categories, default to 2 vacants unless told otherwise (real events use 1-3, with 2 the most common).
    - Ranking/list-base policy for elite or seeded classes: WRE, Italian list, national list, custom points/rank. Invert rankings by default when requested.
+   - Multi-day policy: decide how each stage differs from the others. If the organizer says "random", use actual reproducible randomization, not a deterministic sort that only looks random.
    - Timing requests: early/late/exact, pairs to separate or keep close, family/childcare reasons that should increase weight.
 
 2. Normalize inputs into tables:
@@ -35,6 +36,8 @@ description: Create fair orienteering start list proposals as CSV files from ath
    - Vacants appear only where requested/allowed, normally at the category end (Oribos itself only places vacants at the end of a category; use other placements only on explicit request).
    - Free-start categories are clearly marked and normally have no assigned time.
    - Ranking order is deterministic unless random block seeding was requested.
+   - Any requested randomization uses a reported seed and a real shuffle within the requested scope. Do not call a club-balanced or bib-sorted deterministic order "random".
+   - In multi-day events, no category should have the same start order in two stages unless the organizer explicitly asks for identical grids or a fixed ranking order makes it unavoidable; report any repeated full order or repeated tail block.
    - Report start load per minute, peak load, window, request satisfaction, club-consecutive issues, and first-control collisions.
 
 ## Seeding Rules
@@ -44,6 +47,7 @@ description: Create fair orienteering start list proposals as CSV files from ath
 - If the ranking source uses points where higher is better, sort by ascending points for start order.
 - If both position and points exist, position is normally primary.
 - For multi-race weekends, seeded classes are randomized within strength blocks (commonly 5 or 10) to avoid identical grids across races while keeping the ranking ladder; do not fully shuffle a seeded class. Unseeded classes are commonly fully reshuffled each race.
+- In multi-day events, use different seeds per stage/race and verify cross-stage uniqueness after building proposals. Compare each category's common athletes between stages; if the full order or the last meaningful block (for example the final 5 starters) repeats, reshuffle unless this was explicitly requested.
 - Put vacants at the end of the category unless the organizer explicitly asks otherwise; Oribos-generated grids always place them at the end.
 
 ## Constraint Priority
@@ -81,5 +85,6 @@ Read `references/input-schema.md` before using the script or adapting it to a sp
 - Keep free-start rows in the CSV, but mark them as `free` and leave relative/assigned times empty or `00:00:00` according to the organizer's review preference.
 - A single runner can be placed outside the main block of their category when a strong timing request justifies it; report this explicitly.
 - When using random seeding blocks, set and report a seed so the proposal is reproducible.
+- When using randomness for unseeded categories, shuffle competitors with a seed before applying club-separation heuristics, and report the seed. Sorting by bib/name/club alone is not random.
 - Keep generated CSV/report filenames stable and stage/race-specific when there are multiple races.
 - The bundled script works in whole minutes. For 30-second intervals, treat one slot as 30 seconds (halve the time unit) and convert times when writing the final CSV.

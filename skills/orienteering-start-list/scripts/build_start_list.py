@@ -181,14 +181,19 @@ def randomize_blocks(order: list[Entry], block_size: int, seed: int) -> list[Ent
     return result
 
 
-def separate_clubs(order: list[Entry]) -> list[Entry]:
+def separate_clubs(order: list[Entry], preserve_input_ties: bool = False) -> list[Entry]:
     groups: dict[str, list[Entry]] = defaultdict(list)
-    for entry in order:
+    club_order: dict[str, int] = {}
+    for index, entry in enumerate(order):
         groups[entry.club].append(entry)
+        club_order.setdefault(entry.club, index)
     result: list[Entry] = []
     last_club = ""
     while groups:
-        choices = sorted(groups.items(), key=lambda item: (-len(item[1]), item[0]))
+        choices = sorted(
+            groups.items(),
+            key=lambda item: (-len(item[1]), club_order[item[0]] if preserve_input_ties else item[0]),
+        )
         chosen = None
         for club, entries in choices:
             if club != last_club or len(choices) == 1:
@@ -202,12 +207,19 @@ def separate_clubs(order: list[Entry]) -> list[Entry]:
     return result
 
 
+def shuffle_entries(order: list[Entry], seed: int) -> list[Entry]:
+    result = order[:]
+    random.Random(seed).shuffle(result)
+    return result
+
+
 def order_category(entries: list[Entry], config: dict, category: str) -> list[Entry]:
     cfg = category_config(config, category)
     rank_mode = str(cfg.get("rank_mode", config.get("rank_mode", "position"))).lower()
     invert = bool(cfg.get("invert_ranking", config.get("invert_ranking", False)))
     block_size = int(cfg.get("random_block", config.get("random_block", 0)) or 0)
-    seed = int(config.get("random_seed", 1)) + sum(ord(ch) for ch in category)
+    stage_offset = int(config.get("stage", config.get("race_number", 0)) or 0) * 100000
+    seed = int(config.get("random_seed", 1)) + stage_offset + sum(ord(ch) for ch in category)
 
     # strength_key sorts weakest/unranked first, strongest last — already the inverted-ranking start order.
     ordered = sorted(entries, key=lambda entry: strength_key(entry, rank_mode))
@@ -218,9 +230,14 @@ def order_category(entries: list[Entry], config: dict, category: str) -> list[En
         ordered = randomize_blocks(ordered, block_size, seed)
 
     has_seed_policy = any(key in cfg for key in ("rank_mode", "invert_ranking", "random_block"))
+    randomized_unseeded = False
+    if not has_seed_policy and bool(cfg.get("randomize", config.get("randomize_unseeded", True))):
+        ordered = shuffle_entries(ordered, seed)
+        randomized_unseeded = True
+
     separate_default = not has_seed_policy
     if bool(cfg.get("separate_clubs", config.get("separate_clubs", separate_default))):
-        ordered = separate_clubs(ordered)
+        ordered = separate_clubs(ordered, preserve_input_ties=randomized_unseeded)
     return ordered
 
 
@@ -451,6 +468,9 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         f"Assigned rows incl. vacants: {len(assigned)}",
         f"Free-start rows: {len(free)}",
         f"Vacants: {sum(1 for row in rows if row['row_type'] == 'vacant')}",
+        f"Random seed: {config.get('random_seed', 1)}",
+        f"Stage/race offset: {config.get('stage', config.get('race_number', 0))}",
+        f"Randomize unseeded categories: {config.get('randomize_unseeded', True)}",
     ]
     if load:
         lines.extend(

@@ -41,6 +41,8 @@ Minimal example:
   "free_categories": ["Beginners", "M 10", "W 10", "M 12", "W 12", "Direct"],
   "default_vacants": 2,
   "vacant_position": "end",
+  "randomize_unseeded": true,
+  "stage": 1,
   "categories": {
     "M ELITE": {
       "course": "Course 1",
@@ -75,6 +77,8 @@ Minimal example:
 - `max_load=6`; `peak_load=8` (or `max_load` when `max_load` > 8).
 - `allow_first_control_collision=false` — when `true`, same-minute first-control collisions become a heavy penalty instead of a hard failure (only set on explicit organizer approval).
 - Missing ranks are treated as zero points/unranked.
+- `randomize_unseeded=true` means categories without ranking/random-block policy are genuinely shuffled with `random_seed` before any club-separation heuristic. Use different `stage` values or different seeds for multi-day races.
+- In multi-day work, compare common-athlete orders across stages and reject repeated full orders or repeated final blocks unless the organizer explicitly requested identical grids.
 - The script works in whole minutes. For 30-second start intervals, treat one slot as 30 seconds and convert times when exporting.
 
 ## Output CSV
