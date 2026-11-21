@@ -353,7 +353,22 @@ def order_category(entries: list[Entry], config: dict, category: str) -> list[En
     if not bool(cfg.get("avoid_repeated_pairs", config.get("avoid_repeated_pairs", True))):
         forbidden = set()
     if segments is not None and (forbidden or club_separation):
+        stats: dict = {}
+        neighbour_groups = bool(cfg.get("club_move_to_neighbour_group", config.get("club_move_to_neighbour_group", True)))
         ordered = improve_order(ordered, segments, forbidden, club_separation, seed + 7919)
+        same_club_left = club_separation and any(
+            left.club and left.club == right.club for left, right in zip(ordered, ordered[1:])
+        )
+        if same_club_left and neighbour_groups and len(set(segments)) > 1:
+            # Second phase, only for what the group-internal search could not solve: allow moving an
+            # athlete to the adjacent strength group/block. Positions are re-anchored to the original
+            # groups so nobody drifts more than one group away.
+            original = {entry.athlete_id: segments[index] for index, entry in enumerate(ordered)}
+            ordered = improve_order(
+                ordered, segments, forbidden, club_separation, seed + 104729,
+                neighbour_groups=True, stats=stats, home=original,
+            )
+        config.setdefault("_moved", {})[category] = stats.get("moved", 0)
     config.setdefault("_repeated_pairs", {})[category] = sum(
         1 for left, right in zip(ordered, ordered[1:]) if frozenset((left.athlete_id, right.athlete_id)) in forbidden
     )
@@ -387,13 +402,21 @@ def improve_order(
     forbidden: set[frozenset[str]],
     club_separation: bool,
     seed: int,
+    neighbour_groups: bool = False,
+    stats: dict | None = None,
+    home: dict[str, int] | None = None,
 ) -> list[Entry]:
     """Local search: swap athletes inside their shuffle segment (so seeding is preserved) to avoid
-    (a) same-club neighbours and (b) neighbours who were consecutive in a previous race."""
+    (a) same-club neighbours and (b) neighbours who were consecutive in a previous race.
+    With neighbour_groups, an athlete may also move to the adjacent strength group/block when that
+    is the only way to separate same-club neighbours (each moved athlete costs less than one
+    same-club neighbour, more than nothing)."""
     if len(order) < 3:
         return order
     rng = random.Random(seed)
     result = order[:]
+    home = home or {entry.athlete_id: segments[index] for index, entry in enumerate(order)}
+    reach = 1 if neighbour_groups else 0
 
     def bad_link(left: Entry, right: Entry) -> bool:
         if frozenset((left.athlete_id, right.athlete_id)) in forbidden:
@@ -408,12 +431,15 @@ def improve_order(
                 total += 3
             if frozenset((left.athlete_id, right.athlete_id)) in forbidden:
                 total += 1
+        if reach:
+            total += sum(1 for index, entry in enumerate(items) if segments[index] != home[entry.athlete_id])
         return total
 
     current = cost(result)
     members: dict[int, list[int]] = defaultdict(list)
     for index, segment in enumerate(segments):
-        members[segment].append(index)
+        for near in range(segment - reach, segment + reach + 1):
+            members[near].append(index)
     best, best_cost = result[:], current
     steps = 500 * len(result)
     for step in range(steps):
@@ -423,7 +449,13 @@ def improve_order(
         if not bad:
             break
         index = rng.choice(bad) + rng.randint(0, 1)
-        partners = [other for other in members[segments[index]] if other != index]
+        partners = [
+            other
+            for other in members[segments[index]]
+            if other != index
+            and abs(segments[other] - home[result[index].athlete_id]) <= reach
+            and abs(segments[index] - home[result[other].athlete_id]) <= reach
+        ]
         if not partners:
             continue
         other = rng.choice(partners)
@@ -436,6 +468,8 @@ def improve_order(
                 best, best_cost = result[:], current
         else:
             result[index], result[other] = result[other], result[index]
+    if stats is not None:
+        stats["moved"] = sum(1 for index, entry in enumerate(best) if segments[index] != home[entry.athlete_id])
     return best
 
 
@@ -490,7 +524,13 @@ def build_category_slots(entries: list[Entry], config: dict) -> dict[str, list[S
     for category, category_entries in by_category.items():
         ordered = order_category(category_entries, config, category)
         cfg = category_config(config, category)
-        vacant_count = int(cfg.get("vacants", config.get("default_vacants", 2)) or 0)
+        if "vacants" in cfg:
+            vacant_count = int(cfg["vacants"] or 0)
+        else:
+            vacant_count = int(config.get("default_vacants", 2) or 0)
+            # Small categories: one vacant is enough (but always at least one).
+            if len(ordered) < int(config.get("small_category_size", 10)):
+                vacant_count = min(vacant_count, int(config.get("small_category_vacants", 1)))
         vacant_position = str(cfg.get("vacant_position", config.get("vacant_position", "end"))).lower()
         course = ordered[0].course if ordered else str(cfg.get("course", ""))
         first_control = ordered[0].first_control if ordered else first_control_for(config, {"category": category}, course)
@@ -706,7 +746,7 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     peak_load = int(config.get("peak_load", max(8, max_load)))
     allow_collision = bool(config.get("allow_first_control_collision", False))
     intervals = {category: interval_for(config, category) for category in slots_by_category}
-    attempts = int(config.get("placement_attempts", 12))
+    attempts = int(config.get("placement_attempts", 30))
     orders = candidate_orders(slots_by_category, intervals, int(config.get("random_seed", 1)), attempts)
 
     def place(order: list[str], window: int) -> Placement:
@@ -927,6 +967,9 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
         )
         if same_club:
             notes.append(f"{same_club} same-club neighbours")
+        moved = config.get("_moved", {}).get(category, 0)
+        if moved:
+            notes.append(f"{moved} athletes moved to a neighbouring strength group/block to separate clubs")
         if not config.get("_club_separation", {}).get(category, True):
             notes.append("club separation off")
         repeated = config.get("_repeated_pairs", {}).get(category)

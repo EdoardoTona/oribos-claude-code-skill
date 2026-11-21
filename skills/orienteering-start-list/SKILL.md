@@ -16,7 +16,7 @@ description: Create fair orienteering start list proposals as CSV files from ath
    - Maximum start load per minute: prefer fewer; 6 average/normal maximum is manageable, short peaks of 7-8 (occasionally 9 in large events) may be acceptable, higher usually requires more physical start lanes/corridors.
    - Course for each category and the first control for each course. Importing courses into event software is not required, but first controls are essential for avoiding conflicts.
    - Free-start categories. Always ask; common examples are Beginners, M/W10, M/W12, Direct.
-   - Vacant policy. Ask case by case for free-start categories. For grid categories, default to 2 vacants unless told otherwise (real events use 1-3, with 2 the most common).
+   - Vacant policy. Ask case by case for free-start categories. For grid categories, default to 2 vacants unless told otherwise (real events use 1-3, with 2 the most common); small categories (fewer than 10 athletes) get 1.
    - Ranking/list-base policy for elite or seeded classes: WRE, Italian list, national list, custom points/rank. Invert rankings by default when requested.
    - Multi-day policy: decide how each stage differs from the others. If the organizer says "random", use actual reproducible randomization, not a deterministic sort that only looks random.
    - Timing requests: early/late/exact, pairs to separate or keep close, family/childcare reasons that should increase weight.
@@ -49,7 +49,8 @@ Italian events from 2027 follow extra FISO guidelines; read `references/fiso-202
 - Same limits as before: contained window, 4-6 starters per minute, never more than 8.
 - Master categories (35+): minimum interval 2 minutes in sprint, 3 minutes in other races.
 - In non-sprint races every category gets the widest interval the window allows (4-7 minutes are fine), constant within the category; the total window does not grow. The script picks the intervals itself, sharing the room fairly between categories.
-- No same-club athletes one after the other, except in very small categories; in seeded categories only within the same strength group/block.
+- No same-club athletes one after the other, except in very small categories; in seeded categories first within the same strength group/block, otherwise moving an athlete to the adjacent group/block.
+- Vacants: 2 per grid category, 1 in small categories (fewer than 10 athletes).
 - Ranked categories (Coppa Italia, lista base): randomize within about 3 strength groups; elite categories within blocks of 5 or 10 so the strongest stay at the end.
 - Every category may have its own course: more distinct first controls to check, nothing else changes for the start list.
 
