@@ -127,7 +127,7 @@ def validate(athletes_path: str, config_path: str, out_path: str, report_path: s
     rules = Rules(config)
     errors: list[str] = []
     notes: list[str] = []
-    free_cats = set(config.get("free_categories", [])) | {c for c, v in rules.cats.items() if v.get("free_start")}
+    free_cats = {c.strip() for c in config.get("free_categories", [])} | {c.strip() for c, v in rules.cats.items() if v.get("free_start")}
 
     # Every athlete exactly once, same category and club.
     out_ids = Counter(r["athlete_id"] for r in rows if r["row_type"] != "vacant")
@@ -139,7 +139,7 @@ def validate(athletes_path: str, config_path: str, out_path: str, report_path: s
         a = by_id.get(r["athlete_id"])
         if r["row_type"] != "vacant" and a is None:
             errors.append(f"unknown athlete {r['athlete_id']}")
-        elif a and (a["category"] != r["category"] or a["club"] != r["club"]):
+        elif a and (a["category"].strip() != r["category"] or a["club"].strip() != r["club"]):
             errors.append(f"athlete {r['athlete_id']} changed category or club")
 
     # Free rows without a time, grid rows with a consistent time.

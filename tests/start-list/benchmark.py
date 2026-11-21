@@ -53,6 +53,8 @@ def run_script(work: Path, timeout: int) -> dict:
         length = re.search(r"acceptable length \((\d+) minutes\)", text)
         result["stop_length"] = int(length.group(1)) if length else None
         result["collisions_if_approved"] = int(re.search(r"with about (\d+) first-control", text).group(1))
+        relaxed = re.search(r"Already at the normal interval because of their size: (.+)\.", text)
+        result["relaxed"] = relaxed.group(1).split(", ") if relaxed else []
     elif "ERROR:" in proc.stderr + proc.stdout:
         result["outcome"] = "stop: " + re.search(r"ERROR: ([^.]*)", proc.stderr + proc.stdout).group(1)[:80]
     else:
@@ -88,7 +90,8 @@ def stage_exact(result: dict, cache: Path, seconds: float) -> dict:
     if result.get("outcome") == "grid":
         result["exact"] = solve(str(work / "athletes.csv"), str(work / "config.json"), str(work / "report.txt"), seconds=seconds)
     elif result.get("stop_length"):
-        result["exact"] = solve(str(work / "athletes.csv"), str(work / "config.json"), horizon=result["stop_length"], seconds=seconds)
+        result["exact"] = solve(str(work / "athletes.csv"), str(work / "config.json"), horizon=result["stop_length"],
+                                seconds=seconds, relaxed=set(result.get("relaxed", [])))
     return result
 
 
@@ -98,7 +101,7 @@ def gap_text(r: dict) -> str:
         if "best" not in exact:
             return "-"
         gap = r["window"] - exact["best"]
-        return f"{gap}" if exact["status"] == "optimal" else f"≤{r['window'] - exact['lower_bound']}"
+        return f"{gap}" if exact["status"] == "optimal" else f"{gap}-{r['window'] - exact['lower_bound']}"
     return ""
 
 
@@ -131,6 +134,16 @@ def write_report(results: list[dict], out: Path, years: list[str], seconds: floa
             f"- Window vs proven optimum ({len(optimal)} races): optimal in {sum(1 for g in gaps if g == 0)}, "
             f"median {sorted(gaps)[len(gaps) // 2]} min longer, at most {max(gaps)} min "
             f"({max((r['window'] - r['exact']['best']) / max(1, r['exact']['best']) for r in optimal):.0%})."
+        )
+    unproven = [r for r in grids if r.get("exact", {}).get("status") == "feasible"]
+    if unproven:
+        found = sorted(r["window"] - r["exact"]["best"] for r in unproven)
+        worst = max(unproven, key=lambda r: r["window"] - r["exact"]["best"])
+        lines.append(
+            f"- Optimum not proven within the time limit ({len(unproven)} races, mostly the largest): the exact model found "
+            f"a grid shorter than the script's by a median of {found[len(found) // 2]} min, at most {found[-1]} min "
+            f"({worst['event']} {worst['race']}: {worst['window']} vs {worst['exact']['best']}); the true gap is at "
+            "least that (the Gap column gives the range)."
         )
     lines += ["", "## Races", "",
               "| Date | Event | Race | Type | Grid athletes | Starts | Script | Exact optimum | Gap | Real grid | Valid | Time (s) |",

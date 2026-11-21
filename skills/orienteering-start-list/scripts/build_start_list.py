@@ -241,11 +241,18 @@ def max_interval_for(config: dict, category: str) -> int:
 
 
 def category_config(config: dict, category: str) -> dict:
-    return config.get("categories", {}).get(category, {})
+    """Per-category options; names match ignoring surrounding spaces ("M 21 Long " in exported data)."""
+    categories = config.get("categories", {})
+    if category in categories:
+        return categories[category]
+    for name, options in categories.items():
+        if name.strip() == category.strip():
+            return options
+    return {}
 
 
 def is_free_category(config: dict, category: str) -> bool:
-    if category in set(config.get("free_categories", [])):
+    if category.strip() in {name.strip() for name in config.get("free_categories", [])}:
         return True
     return bool(category_config(config, category).get("free_start", False))
 
@@ -1286,6 +1293,10 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                 "first-control collisions.\nFirst-control collisions must be approved by the organizer. Options: more distinct "
                 "first controls (ask the course setter), more separate starts, a longer window_minutes, or set "
                 '"allow_first_control_collision": true after the organizer approves the collisions.'
+                + (
+                    "\nAlready at the normal interval because of their size: " + ", ".join(sorted(config["_relaxed"])) + "."
+                    if config.get("_relaxed") else ""
+                )
             )
     if found is None:
         allow_collision = approved_collisions

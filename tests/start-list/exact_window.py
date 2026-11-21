@@ -11,8 +11,9 @@ first control in the same minute, at most max_load starters per start and minute
     python3 exact_window.py athletes.csv config.json [--report report.txt] [--horizon N] [--seconds 60]
 
 With --report the categories that gave up their recommended minimum are read from it and the script's window
-is the upper limit; without it, categories with 50+ athletes may use the normal interval and --horizon is the
-upper limit (e.g. the length at which the script stopped). Prints one JSON line.
+is the upper limit; without it, --horizon is the upper limit (e.g. the length at which the script stopped) and
+--relaxed lists the categories at the normal interval (the script prints them when it stops; default: 50+
+athletes). Prints one JSON line.
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ from validate import Rules, relaxed_categories  # noqa: E402
 
 def grid_categories(athletes_path: str, rules: Rules) -> dict[str, dict]:
     config = rules.config
-    free = set(config.get("free_categories", [])) | {c for c, v in rules.cats.items() if v.get("free_start")}
+    free = {c.strip() for c in config.get("free_categories", [])} | {c.strip() for c, v in rules.cats.items() if v.get("free_start")}
     courses = config.get("courses", {})
     cats: dict[str, dict] = {}
     for row in csv.DictReader(open(athletes_path, encoding="utf-8-sig")):
@@ -50,7 +51,7 @@ def grid_categories(athletes_path: str, rules: Rules) -> dict[str, dict]:
 
 
 def solve(athletes_path: str, config_path: str, report_path: str | None = None, horizon: int | None = None,
-          seconds: float = 60, workers: int = 4) -> dict:
+          seconds: float = 60, workers: int = 4, relaxed: set[str] | None = None) -> dict:
     from ortools.sat.python import cp_model
 
     config = json.load(open(config_path, encoding="utf-8"))
@@ -63,7 +64,7 @@ def solve(athletes_path: str, config_path: str, report_path: str | None = None, 
         script_window = int(re.search(r"Target window: (\d+)", report).group(1))
         horizon = horizon or script_window
     else:
-        relaxed = {c for c, e in cats.items() if e["athletes"] >= large}
+        relaxed = relaxed if relaxed is not None else {c for c, e in cats.items() if e["athletes"] >= large}
         script_window = None
     if horizon is None:
         raise SystemExit("--report or --horizon is needed")
@@ -122,10 +123,12 @@ def main() -> None:
     parser.add_argument("config")
     parser.add_argument("--report")
     parser.add_argument("--horizon", type=int)
+    parser.add_argument("--relaxed", nargs="*", help="categories at the normal interval (default without --report: 50+ athletes)")
     parser.add_argument("--seconds", type=float, default=60)
     parser.add_argument("--workers", type=int, default=4)
     args = parser.parse_args()
-    print(json.dumps(solve(args.athletes, args.config, args.report, args.horizon, args.seconds, args.workers)))
+    relaxed = set(args.relaxed) if args.relaxed is not None else None
+    print(json.dumps(solve(args.athletes, args.config, args.report, args.horizon, args.seconds, args.workers, relaxed)))
 
 
 if __name__ == "__main__":
