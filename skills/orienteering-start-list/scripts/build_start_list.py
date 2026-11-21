@@ -935,6 +935,42 @@ def best_placement(
         return None, math.inf  # the category alone is longer than the window
     best_score = math.inf
     best_offset: int | None = None
+    if slots and all(slot.entry.request_minute is None for slot in slots) and len(
+        {(slot.entry.start_lane, leg_key(slot.entry)) for slot in slots}
+    ) == 1:
+        # Fast path (same start and first control, no time requests): the cost of each minute is computed once,
+        # then every offset sums every interval-th minute. Same scores as offset_score, in the same float operations.
+        lane, control = slots[0].entry.start_lane, leg_key(slots[0].entry)
+        blocked = 1 << 60
+        penalty: list[int] = []
+        squares: list[int] = []
+        for minute in range(window + 1):
+            before = board.load[(lane, minute)]
+            load = before + 1
+            if load > peak_load or (minute < len(ramp) and load > ramp[minute]):
+                cost = blocked
+            else:
+                cost = (load - max_load) * 100 if load > max_load else 0
+                taken = board.first.get(minute) if control else None
+                if taken and taken[control] > 0:
+                    cost = cost + 1000 if allow_collision else blocked
+            penalty.append(cost)
+            squares.append(2 * before + 1)
+        for offset in range(0, max(0, window - span) + 1):
+            end = offset + span + 1
+            total = sum(penalty[offset:end:interval])
+            if total >= blocked:
+                continue
+            score = total + sum(squares[offset:end:interval]) * 0.1
+            score += (pack + early) * offset
+            if score < best_score:
+                best_score, best_offset = score, offset
+        if best_offset is None:
+            return None, math.inf
+        return [
+            Slot(entry=slot.entry, category_position=slot.category_position, minute=best_offset + index * interval)
+            for index, slot in enumerate(slots)
+        ], best_score
     for offset in range(0, max(0, window - span) + 1):
         # pack > 0 favours the earliest valid offset, so categories sharing a busy first control
         # interleave without leaving holes on it (first fit) instead of spreading the load.
@@ -1003,6 +1039,144 @@ def place_all(
     return Placement(placed, None, over_max, collisions)
 
 
+REPAIR_HARD = 1_000_000  # one starter over the load limit / the ramp-up, or a forbidden first-control collision
+REPAIR_SOFT = 1_000  # one starter over max_load where peaks up to peak_load are tolerated
+
+
+def repair_grid(
+    slots_by_category: dict[str, list[Slot]],
+    choices: dict[str, list[int]],
+    order: list[str],
+    window: int,
+    max_load: int,
+    hard_load: int,
+    ramp: tuple[int, ...],
+    sensitive: frozenset[str] = frozenset(),
+    early_weight: float = 0.0,
+    seed: int = 1,
+    moves: int = 2000,
+    early_limit: int | None = None,
+) -> tuple[dict[str, int], Placement] | None:
+    """Local search for a collision-free grid that the category-by-category placement could not find.
+
+    Every category gets an offset and an interval among `choices[category]`. Violations: starters above
+    `hard_load` per start and minute (or above the ramp-up) and first-control collisions. The categories are
+    first placed in `order` where they add the fewest violations; then, while violations are left, a category
+    involved in one (not one of the last few moved) is moved to the offset and interval that leave the fewest
+    (min-conflicts with a tabu list); minutes that stay in violation weigh more and more (breakout), so the
+    search does not get stuck where every single move looks worse. Ties go to the least loaded minutes; sensitive categories pay
+    `early_weight` per minute of delay and, with `early_limit`, start by that minute. Returns the intervals and the placement, or None when violations are
+    still left after `moves` moves. Categories whose athletes do not share one start and first control are
+    not handled (None)."""
+    cats = [c for c in order if slots_by_category.get(c)]
+    lane: dict[str, str] = {}
+    leg: dict[str, str] = {}
+    for c in cats:
+        entries = [slot.entry for slot in slots_by_category[c]]
+        lanes = {entry.start_lane for entry in entries}
+        legs = {leg_key(entry) for entry in entries}
+        if len(lanes) != 1 or len(legs) != 1:
+            return None
+        lane[c], leg[c] = lanes.pop(), legs.pop()
+    size = {c: len(slots_by_category[c]) for c in cats}
+    if any((size[c] - 1) * min(choices[c]) > window for c in cats):
+        return None
+    limit = [min(hard_load, ramp[m]) if m < len(ramp) else hard_load for m in range(window + 1)]
+    load = {value: [0] * (window + 1) for value in set(lane.values())}
+    first = {value: [0] * (window + 1) for value in set(leg.values()) if value}
+    load_weight = {value: [1] * (window + 1) for value in load}
+    first_weight = {value: [1] * (window + 1) for value in first}
+    pos: dict[str, tuple[int, int]] = {}
+    violations = 0
+    rng = random.Random(seed)
+
+    def add(c: str, offset: int, interval: int) -> None:
+        nonlocal violations
+        ld, fl = load[lane[c]], first.get(leg[c])
+        for m in range(offset, offset + (size[c] - 1) * interval + 1, interval):
+            if ld[m] >= limit[m]:
+                violations += 1
+            ld[m] += 1
+            if fl is not None:
+                if fl[m] >= 1:
+                    violations += 1
+                fl[m] += 1
+        pos[c] = (offset, interval)
+
+    def remove(c: str) -> None:
+        nonlocal violations
+        offset, interval = pos.pop(c)
+        ld, fl = load[lane[c]], first.get(leg[c])
+        for m in range(offset, offset + (size[c] - 1) * interval + 1, interval):
+            if ld[m] > limit[m]:
+                violations -= 1
+            ld[m] -= 1
+            if fl is not None:
+                if fl[m] > 1:
+                    violations -= 1
+                fl[m] -= 1
+
+    def best_move(c: str) -> tuple[int, int]:
+        ld, fl = load[lane[c]], first.get(leg[c])
+        lw, fw = load_weight[lane[c]], first_weight.get(leg[c])
+        cost = [
+            (REPAIR_HARD * lw[m] if ld[m] >= limit[m] else REPAIR_SOFT if ld[m] >= max_load else 0) + ld[m]
+            + (REPAIR_HARD * fw[m] if fl is not None and fl[m] else 0)
+            for m in range(window + 1)
+        ]
+        early = early_weight * 10 if c in sensitive else 0.0
+        latest = early_limit if c in sensitive and early_limit is not None else window
+        best_score, best = math.inf, []
+        for interval in choices[c]:
+            span = (size[c] - 1) * interval
+            for offset in range(min(window - span, latest) + 1):
+                score = sum(cost[offset:offset + span + 1:interval]) + early * offset
+                if score < best_score:
+                    best_score, best = score, [(offset, interval)]
+                elif score == best_score:
+                    best.append((offset, interval))
+        return rng.choice(best)
+
+    for c in cats:
+        add(c, *best_move(c))
+    tabu: dict[str, int] = {}
+    for step in range(moves):
+        if violations == 0:
+            break
+        conflicted = []
+        for c in cats:
+            offset, interval = pos[c]
+            ld, fl = load[lane[c]], first.get(leg[c])
+            for m in range(offset, offset + (size[c] - 1) * interval + 1, interval):
+                if ld[m] > limit[m] or (fl is not None and fl[m] > 1):
+                    conflicted.append(c)
+                    break
+        free = [c for c in conflicted if tabu.get(c, -1) < step] or conflicted
+        c = rng.choice(free)
+        before = violations
+        remove(c)
+        add(c, *best_move(c))
+        tabu[c] = step + 3 + rng.randint(0, min(10, len(conflicted)))
+        if violations >= before:  # no progress: the minutes still in violation weigh more from now on
+            for value, ld in load.items():
+                for m in range(window + 1):
+                    if ld[m] > limit[m]:
+                        load_weight[value][m] += 1
+            for value, fl in first.items():
+                for m in range(window + 1):
+                    if fl[m] > 1:
+                        first_weight[value][m] += 1
+    if violations:
+        return None
+    placed = [
+        Slot(entry=slot.entry, category_position=slot.category_position, minute=pos[c][0] + index * pos[c][1])
+        for c in cats
+        for index, slot in enumerate(slots_by_category[c])
+    ]
+    over_max = sum(1 for values in load.values() for value in values if value > max_load)
+    return {c: pos[c][1] for c in cats}, Placement(placed, None, over_max, 0)
+
+
 def first_control_bound(slots_by_category: dict[str, list[Slot]]) -> int:
     """At most one starter per first control per minute: the busiest first control needs this many minutes."""
     counts = Counter(
@@ -1034,15 +1208,20 @@ def target_load(slots_by_category: dict[str, list[Slot]], config: dict) -> float
     return target_for(len(lanes), config)
 
 
-def auto_window(slots_by_category: dict[str, list[Slot]], config: dict, include_first_controls: bool = True) -> int:
+def auto_window(
+    slots_by_category: dict[str, list[Slot]], config: dict, include_first_controls: bool = True, ramp_margin: bool = True,
+) -> int:
     """Contained start window: long enough for the longest category at its minimum interval, for the
-    busiest first control and for the target average load per start."""
+    busiest first control and for the target average load per start. ramp_margin: a few minutes more for the
+    longest category, since several long ones cannot all start while the start ramps up (the reference window
+    for the notes); without it, the shortest window worth trying (the search lengthens it when needed)."""
     per_lane = Counter(slot.entry.start_lane for slots in slots_by_category.values() for slot in slots)
     total = max(per_lane.values(), default=0)  # the busiest start sets the pace
     target = target_load(slots_by_category, config)
     longest = max(((len(slots) - 1) * interval_for(config, category) for category, slots in slots_by_category.items()), default=0)
     # Several long categories cannot all start in the first minutes while the start ramps up.
-    longest += len(config.get("ramp_up", [1, 2, 4]))
+    if ramp_margin:
+        longest += len(config.get("ramp_up", [1, 2, 4]))
     bound = first_control_bound(slots_by_category) if include_first_controls else 0
     window = max(longest, bound, math.ceil(total / target) - 1)
     if str(config.get("pace", "compact")).lower() == "spread" and "target_load" not in config:
@@ -1094,7 +1273,7 @@ def candidate_orders(
 def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list[Slot]:
     raw_window = config.get("window_minutes", "auto")
     automatic = str(raw_window).lower() == "auto"
-    window = auto_window(slots_by_category, config) if automatic else int(raw_window)
+    window = auto_window(slots_by_category, config, ramp_margin=False) if automatic else int(raw_window)
     max_load = int(config.get("max_load", 6))
     peak_load = int(config.get("peak_load", max(8, max_load)))
     # First-control collisions are never chosen silently: a collision-free grid is always searched first, and
@@ -1121,7 +1300,10 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
             if slots and fc_count[leg_key(slots[0].entry)] > 0.6 * (window + 1)
         )
 
-    mode = {"packed": frozenset(), "collide": frozenset()}
+    mode = {"packed": frozenset(), "collide": frozenset(), "repaired": False}
+    repair_moves = int(config.get("repair_moves", 2000))
+    repair_restarts = int(config.get("repair_restarts", 4))
+    seed = int(config.get("random_seed", 1))
 
     def place(order: list[str], window: int, packed: frozenset[str] | None = None) -> Placement:
         packed = mode["packed"] if packed is None else packed
@@ -1198,16 +1380,47 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     def acceptable(found: tuple[list[str], Placement] | None) -> bool:
         return found is not None and (over_allowed is None or found[1].over_max <= over_allowed)
 
+    def repaired(window: int) -> tuple[list[str], Placement] | None:
+        """Local search (repair_grid) when the category-by-category placement found nothing: each category may
+        also take its interval + 1 or + 2 (within its limit) instead of raising whole groups."""
+        choices = {}
+        for c in slots_by_category:
+            low = base_intervals[c]
+            high = low if is_fixed(config, c) else max(low, min(max_interval_for(config, c), low + 2))
+            choices[c] = list(range(low, high + 1))
+        levels = [max_load] if over_allowed == 0 else [max_load, peak_load]
+        # Sensitive categories starting in the first quarter if possible, else anywhere.
+        attempts = [(window // 4, hard) for hard in levels] if sensitive else []
+        attempts += [(None, hard) for hard in levels]
+        for early_limit, hard in attempts:
+            for k, order in enumerate(orders[:repair_restarts]):
+                out = repair_grid(
+                    slots_by_category, choices, order, window, max_load, hard, ramp, sensitive, early_weight,
+                    seed=seed + k, moves=repair_moves, early_limit=early_limit,
+                )
+                if out is None or (over_allowed is not None and out[1].over_max > over_allowed):
+                    continue
+                chosen, placement = out
+                intervals.update(chosen)
+                raised = {c: (base_intervals[c], chosen[c]) for c in chosen if chosen[c] != base_intervals[c]}
+                if raised:
+                    config["_repaired"] = raised
+                mode["repaired"] = True
+                return order, placement
+        return None
+
     def fit_window(window: int) -> tuple[list[str], Placement] | None:
         intervals.update(base_intervals)
         config.pop("_aligned", None)  # the notes describe the last fit only, never an attempt left behind
+        config.pop("_repaired", None)
+        mode["repaired"] = False
         found = first_fit(window)
         if found is not None and not acceptable(found):
             found = None
-        for mode in ("even", "max", "max_even"):
+        for align_mode in ("even", "max", "max_even"):
             if found is not None:
                 break
-            aligned = harmonized(window, mode)
+            aligned = harmonized(window, align_mode)
             if aligned != base_intervals:
                 intervals.update(aligned)
                 found = first_fit(window)
@@ -1220,14 +1433,30 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                         c: (base_intervals[c], aligned[c], sorted(m for m in groups[leg_key(slots_by_category[c][0].entry)] if m != c))
                         for c in aligned if aligned[c] != base_intervals[c]
                     }
+        if found is None and not allow_collision and repair_moves > 0:
+            intervals.update(base_intervals)
+            found = repaired(window)
         return found
+
+    def snapshot() -> tuple:
+        return dict(intervals), config.get("_aligned"), config.get("_repaired"), dict(mode)
+
+    def restore(state: tuple) -> None:
+        intervals.update(state[0])
+        for key, value in (("_aligned", state[1]), ("_repaired", state[2])):
+            if value is None:
+                config.pop(key, None)
+            else:
+                config[key] = value
+        mode.update(state[3])
 
     # Acceptable length: what entries, load and the longest category need, ignoring first controls.
     # Too few distinct first controls must not make the grid unrealistically long: beyond
     # `max_window_stretch` (default +25%) a collision-free grid is not searched further; the fewest
     # first-control collisions are used only if the organizer approved them, otherwise the script stops.
     fc_bound = first_control_bound(slots_by_category)
-    initial_window = window
+    # Reference for the notes on categories that made the grid longer: the target window with the ramp-up margin.
+    initial_window = max(window, auto_window(slots_by_category, config)) if automatic else window
     if automatic:
         acceptable_window = auto_window(slots_by_category, config, include_first_controls=False)
         # Percentages alone are too tight for small races: allow at least +20 minutes of search margin.
@@ -1250,28 +1479,37 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
         limit = window
     fallback = None
 
-    def grow(start: int, stop: int) -> tuple[int, tuple[list[str], Placement] | None]:
-        """Smallest window above `start` (up to `stop`) that fits: grow in 3% steps, then binary-search
-        back between the last failing and the first fitting window."""
+    def grow(start: int, stop: int, first: int | None = None) -> tuple[int, tuple[list[str], Placement] | None]:
+        """Smallest window above `start` (up to `stop`) that fits: grow in 3% steps (trying `first` first, when
+        given), then binary-search back between the last failing and the first fitting window."""
         low, high, found = start, start, None
         while found is None and high < stop:
             low = high
-            high = min(stop, math.ceil(high * 1.03) + 1)
+            if first is not None and first > high:
+                high = min(stop, first)
+            else:
+                high = min(stop, math.ceil(high * 1.03) + 1)
+            first = None
             found = fit_window(high)
         if found is None:
             return high, None
-        best = high
+        best, best_found, best_state = high, found, snapshot()
         while high - low > 1:
             middle = (low + high) // 2
-            if fit_window(middle) is not None:
+            trial = fit_window(middle)
+            if trial is not None:
                 high = best = middle
+                best_found, best_state = trial, snapshot()
             else:
                 low = middle
-        return best, fit_window(best)  # re-run so intervals match the chosen window
+        restore(best_state)  # intervals and notes of the chosen window
+        return best, best_found
 
     found = None if (automatic and window > limit) else fit_window(window)
     if found is None and automatic and window <= limit:
-        window, found = grow(window, limit)
+        # The shortest window worth trying did not fit: the target window (with the ramp-up margin) next, so
+        # that the search never ends above it when it fits (a fit is not always kept by a slightly longer window).
+        window, found = grow(window, limit, first=initial_window)
     if found is None:
         # No collision-free grid of acceptable length: the fewest first-control collisions at that length.
         allow_collision = True
@@ -1314,7 +1552,7 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     #     categories alone go back to the normal interval; if many categories overflow, the longer grid is
     #     the right answer.
     if automatic and fallback is None and window > initial_window and not allow_collision:
-        grown = window
+        grown, grown_found, grown_state = window, (order, result), snapshot()
         intervals.update(base_intervals)
         culprits = None
         for packed in (frozenset(), frozenset(slots_by_category)):
@@ -1363,8 +1601,8 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                 "categories": {c: v for c, v in lowered.items()}, "window": window, "longer_window": grown,
             }
         else:
-            found = fit_window(grown)  # restore the grown solution and its intervals
-            order, result = found
+            restore(grown_state)  # back to the grown solution and its intervals
+            window, (order, result) = grown, grown_found
             if not failing:
                 config["_overflow_load"] = {"window": initial_window, "grown": grown}
             else:
@@ -1382,9 +1620,31 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                 first[slot.entry.category] = min(first.get(slot.entry.category, slot.minute), slot.minute)
         return sum(first.values())
 
+    def move_one(current: Placement, category: str, interval: int) -> Placement:
+        """The grid with only `category` placed again (at `interval`), the others where they are."""
+        board = Board()
+        others = [slot for slot in current.slots if slot.entry.category != category]
+        board.add(others)
+        candidate, score = best_placement(
+            board, slots_by_category[category], interval, window, max_load, peak_load, allow_collision, ramp=ramp,
+            early=early_weight if category in sensitive else 0.0,
+        )
+        if candidate is None or math.isinf(score):
+            return Placement(current.slots, category, 0, 0)
+        board.add(candidate)
+        over_max = sum(1 for value in board.load.values() if value > max_load)
+        collisions = sum(count - 1 for counter in board.first.values() for count in counter.values() if count > 1)
+        return Placement(others + candidate, None, over_max, collisions)
+
     # 1c. Sensitive categories first: with the window fixed, try every category order and keep the one that
     #     starts the sensitive categories earliest, without more minutes over max_load or more collisions.
-    if sensitive:
+    #     A grid found by the local search is kept and its sensitive categories are moved earlier one at a time.
+    if sensitive and mode["repaired"]:
+        for category in sorted(sensitive):
+            trial = move_one(result, category, intervals[category])
+            if not trial.failed and (trial.over_max, trial.collisions, delay(trial)) < (result.over_max, result.collisions, delay(result)):
+                result = trial
+    elif sensitive:
         best_key = (result.over_max, result.collisions, delay(result))
         modes = [mode["packed"]] + [m for m in (frozenset(), frozenset(slots_by_category)) if m != mode["packed"]]
         for packed in modes:
@@ -1412,8 +1672,12 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
             key=lambda c: (intervals[c], -len(slots_by_category[c]), c),
         )
         intervals[category] += 1
-        trial_order, trial = order, place(order, window)
-        if trial.failed:
+        if mode["repaired"]:
+            # Grid from the local search: the category alone is placed again, the others stay.
+            trial_order, trial = order, move_one(result, category, intervals[category])
+        else:
+            trial_order, trial = order, place(order, window)
+        if trial.failed and not mode["repaired"]:
             # The current order may simply not suit the new intervals: try the others once.
             alternative = first_fit(window, order)
             if alternative is not None:
@@ -1708,6 +1972,12 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
             notes.append(
                 f"interval raised from {aligned[0]} to {aligned[1]} to match the categories sharing its start and first "
                 f"control ({', '.join(aligned[2])}): intervals without a common factor (2 and 3, 1 and 2) collide regularly on the same first control"
+            )
+        elif config.get("_repaired", {}).get(category):
+            low, high = config["_repaired"][category]
+            notes.append(
+                f"interval {low} to {high} min so that the grid fits without first-control collisions or overload"
+                + (", then widened because the window allowed it" if interval > high else "")
             )
         elif interval > start_interval:
             notes.append("widened because the window allowed it")

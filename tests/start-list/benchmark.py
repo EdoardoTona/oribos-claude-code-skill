@@ -28,6 +28,7 @@ HERE = Path(__file__).resolve().parent
 SCRIPT = HERE.parent.parent / "skills" / "orienteering-start-list" / "scripts" / "build_start_list.py"
 sys.path.insert(0, str(HERE))
 import liveresults  # noqa: E402
+from exact_window import pace_floor  # noqa: E402
 from validate import validate  # noqa: E402
 
 
@@ -74,6 +75,7 @@ def stage_script(args: tuple) -> dict:
     work = cache / "work" / race["id"]
     result["race_type"] = race_type
     result.update(liveresults.convert(data, race_type, work))
+    result["pace_floor"] = pace_floor(str(work / "athletes.csv"), str(work / "config.json"))
     result.update(run_script(work, timeout))
     if result["outcome"] == "grid":
         check = validate(str(work / "athletes.csv"), str(work / "config.json"), str(work / "proposal.csv"), str(work / "report.txt"))
@@ -131,7 +133,10 @@ def write_report(results: list[dict], out: Path, years: list[str], seconds: floa
         "rankings, `random_seed` 2027), checked by `validate.py` and compared with the exact shortest window from "
         f"`exact_window.py` (CP-SAT, {seconds:.0f} s per race, up to 180 s for the largest). Minutes are window lengths "
         "(last minute of the grid). An optimum is proven by CP-SAT or when it equals a simple lower bound (busiest first "
-        "control, load, longest category); otherwise the Exact column gives the proven range.",
+        "control, load, longest category); otherwise the Exact column gives the proven range. The exact model may load "
+        "every minute up to `max_load` (6), while the script's automatic window keeps the pace at 5.5 starters a minute "
+        "on average (4.5 with 3 or more starts): Pace floor is the shortest window that pace allows, so a gap down to it "
+        "is by design.",
         "",
         "## Summary",
         "",
@@ -149,6 +154,11 @@ def write_report(results: list[dict], out: Path, years: list[str], seconds: floa
             f"median {sorted(gaps)[len(gaps) // 2]} min longer, at most {max(gaps)} min "
             f"({max((r['window'] - r['exact']['best']) / max(1, r['exact']['best']) for r in optimal):.0%})."
         )
+        beyond = [r["window"] - max(r["exact"]["best"], r.get("pace_floor", 0)) for r in optimal]
+        lines.append(
+            f"- Beyond what the pace requires (the larger of optimum and pace floor), same races: none in "
+            f"{sum(1 for g in beyond if g <= 0)}, within 3 min in {sum(1 for g in beyond if g <= 3)}, at most {max(beyond)} min."
+        )
     unproven = [r for r in grids if "best" in r.get("exact", {}) and not proven(r)]
     if unproven:
         found = sorted(r["window"] - r["exact"]["best"] for r in unproven)
@@ -160,8 +170,8 @@ def write_report(results: list[dict], out: Path, years: list[str], seconds: floa
             "least that, at most the upper end of the Gap column."
         )
     lines += ["", "## Races", "",
-              "| Date | Event | Race | Type | Grid athletes | Starts | Script | Exact optimum | Gap | Real grid | Valid | Time (s) |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "| Date | Event | Race | Type | Grid athletes | Starts | Script | Exact optimum | Gap | Pace floor | Real grid | Valid | Time (s) |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in sorted(included, key=lambda r: (r["date"], r["id"])):
         exact = r.get("exact", {})
         if r.get("outcome") == "grid":
@@ -177,7 +187,8 @@ def write_report(results: list[dict], out: Path, years: list[str], seconds: floa
         real = f"{r.get('real_window', '-')} ({r.get('real_collisions', '-')} coll.)"
         valid = "" if r.get("outcome") != "grid" else ("yes" if r.get("valid") else "NO")
         lines.append(f"| {r['date']} | {r['event']} | {r['race']} | {r.get('race_type', '')} | {r.get('grid_athletes', '')} | "
-                     f"{r.get('starts', '')} | {script} | {best} | {gap_text(r)} | {real} | {valid} | {r.get('seconds', '')} |")
+                     f"{r.get('starts', '')} | {script} | {best} | {gap_text(r)} | {r.get('pace_floor', '')} | {real} | {valid} | "
+                     f"{r.get('seconds', '')} |")
     problems = [r for r in included if r.get("errors") or r.get("outcome") in ("crash", "timeout")]
     if problems:
         lines += ["", "## Problems", ""]

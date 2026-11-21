@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import re
 import sys
 import time
@@ -48,6 +49,24 @@ def grid_categories(athletes_path: str, rules: Rules) -> dict[str, dict]:
     for c, entry in cats.items():
         entry["slots"] = entry["athletes"] + rules.vacants(c, entry["athletes"])
     return cats
+
+
+def pace_floor(athletes_path: str, config_path: str) -> int:
+    """Shortest window the script's automatic pace allows: the busiest start at `target_load` starters per minute
+    on average (max_load - 0.5 with the compact pace, one less with 3 or more starts). The script never goes
+    below it; the exact model ignores it, so part of a gap may be the pace, by design."""
+    config = json.load(open(config_path, encoding="utf-8"))
+    cats = grid_categories(athletes_path, Rules(config))
+    per_lane = Counter()
+    for e in cats.values():
+        per_lane[e["lane"]] += e["slots"]
+    if "target_load" in config:
+        target = float(config["target_load"])
+    else:
+        pace = {"compact": 0.5, "spread": 2.0}[str(config.get("pace", "compact")).lower()]
+        many = len(per_lane) >= int(config.get("many_starts", 3))
+        target = max(1.0, min(int(config.get("max_load", 6)), 8) - pace - (1.0 if many else 0.0))
+    return max(0, math.ceil(max(per_lane.values(), default=0) / target) - 1)
 
 
 def solve(athletes_path: str, config_path: str, report_path: str | None = None, horizon: int | None = None,
