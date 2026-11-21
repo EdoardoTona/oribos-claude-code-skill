@@ -330,25 +330,34 @@ def order_category(entries: list[Entry], config: dict, category: str) -> list[En
         ordered = shuffle_entries(ordered, seed)
         randomized_unseeded = True
 
-    separate_default = not has_seed_policy
-    club_separation = bool(cfg.get("separate_clubs", config.get("separate_clubs", separate_default)))
-    if club_separation:
-        ordered = separate_clubs(ordered, preserve_input_ties=randomized_unseeded)
+    if has_seed_policy:
+        policy, size = seeding_policy(config, category)
+        segments = segment_ids(len(ordered), policy, size)
+    elif randomized_unseeded:
+        segments = [0] * len(ordered)
+    else:
+        segments = None  # fixed order: nothing may move
+
+    # Same-club neighbours are avoided by default wherever the order is random (fully or inside
+    # strength groups/blocks), except in very small categories where it is not meaningful.
+    min_entries = int(cfg.get("club_separation_min_entries", config.get("club_separation_min_entries", 4)))
+    club_separation = bool(cfg.get("separate_clubs", config.get("separate_clubs", segments is not None)))
+    club_separation = club_separation and len(ordered) >= min_entries
+    if club_separation and segments is None:
+        # Explicit request on a fixed-order category: legacy greedy separation (may break the ranking order).
+        ordered = separate_clubs(ordered)
+    elif club_separation and randomized_unseeded:
+        ordered = separate_clubs(ordered, preserve_input_ties=True)
 
     forbidden = config.get("_previous_pairs", set())
-    if forbidden and bool(cfg.get("avoid_repeated_pairs", config.get("avoid_repeated_pairs", True))):
-        if has_seed_policy:
-            policy, size = seeding_policy(config, category)
-            segments = segment_ids(len(ordered), policy, size)
-        elif randomized_unseeded:
-            segments = [0] * len(ordered)
-        else:
-            segments = None
-        if segments is not None:
-            ordered = avoid_repeated_pairs(ordered, segments, forbidden, club_separation, seed + 7919)
+    if not bool(cfg.get("avoid_repeated_pairs", config.get("avoid_repeated_pairs", True))):
+        forbidden = set()
+    if segments is not None and (forbidden or club_separation):
+        ordered = improve_order(ordered, segments, forbidden, club_separation, seed + 7919)
     config.setdefault("_repeated_pairs", {})[category] = sum(
         1 for left, right in zip(ordered, ordered[1:]) if frozenset((left.athlete_id, right.athlete_id)) in forbidden
     )
+    config.setdefault("_club_separation", {})[category] = club_separation
     return ordered
 
 
@@ -372,27 +381,32 @@ def segment_ids(size: int, policy: str, value: int) -> list[int] | None:
     return None
 
 
-def avoid_repeated_pairs(
+def improve_order(
     order: list[Entry],
     segments: list[int],
     forbidden: set[frozenset[str]],
     club_separation: bool,
     seed: int,
 ) -> list[Entry]:
-    """Local search: swap athletes inside their shuffle segment so that no two athletes who were
-    consecutive in a previous race are consecutive again. Same-club neighbours are a minor cost
-    when club separation is active."""
+    """Local search: swap athletes inside their shuffle segment (so seeding is preserved) to avoid
+    (a) same-club neighbours and (b) neighbours who were consecutive in a previous race."""
     if len(order) < 3:
         return order
     rng = random.Random(seed)
     result = order[:]
 
+    def bad_link(left: Entry, right: Entry) -> bool:
+        if frozenset((left.athlete_id, right.athlete_id)) in forbidden:
+            return True
+        return club_separation and bool(left.club) and left.club == right.club
+
     def cost(items: list[Entry]) -> int:
+        # Same-club neighbours weigh more than repeated pairs: fairness first, variety second.
         total = 0
         for left, right in zip(items, items[1:]):
+            if club_separation and left.club and left.club == right.club:
+                total += 3
             if frozenset((left.athlete_id, right.athlete_id)) in forbidden:
-                total += 100
-            elif club_separation and left.club and left.club == right.club:
                 total += 1
         return total
 
@@ -400,14 +414,14 @@ def avoid_repeated_pairs(
     members: dict[int, list[int]] = defaultdict(list)
     for index, segment in enumerate(segments):
         members[segment].append(index)
-    for _ in range(300 * len(result)):
-        if current < 100:
+    best, best_cost = result[:], current
+    steps = 500 * len(result)
+    for step in range(steps):
+        if best_cost == 0:
             break
-        bad = [
-            index
-            for index in range(len(result) - 1)
-            if frozenset((result[index].athlete_id, result[index + 1].athlete_id)) in forbidden
-        ]
+        bad = [index for index in range(len(result) - 1) if bad_link(result[index], result[index + 1])]
+        if not bad:
+            break
         index = rng.choice(bad) + rng.randint(0, 1)
         partners = [other for other in members[segments[index]] if other != index]
         if not partners:
@@ -415,11 +429,14 @@ def avoid_repeated_pairs(
         other = rng.choice(partners)
         result[index], result[other] = result[other], result[index]
         candidate = cost(result)
-        if candidate <= current:
+        # Accept improvements and sideways moves; occasionally accept a worse move to escape local minima.
+        if candidate <= current or rng.random() < 0.1 * (1 - step / steps):
             current = candidate
+            if current < best_cost:
+                best, best_cost = result[:], current
         else:
             result[index], result[other] = result[other], result[index]
-    return result
+    return best
 
 
 def load_previous_pairs(paths: list[str], base: Path) -> set[frozenset[str]]:
@@ -528,38 +545,59 @@ def relation_penalty(all_slots: list[Slot], config: dict) -> float:
     return penalty
 
 
-def evaluate(
-    placed: list[Slot],
-    candidate: list[Slot],
+class Board:
+    """Start load and first controls per minute of the categories placed so far."""
+
+    def __init__(self) -> None:
+        self.load: Counter[int] = Counter()
+        self.first: dict[int, Counter[str]] = defaultdict(Counter)
+
+    def add(self, slots: list[Slot]) -> None:
+        for slot in slots:
+            assert slot.minute is not None
+            self.load[slot.minute] += 1
+            if slot.entry.first_control:
+                self.first[slot.minute][slot.entry.first_control] += 1
+
+
+def offset_score(
+    board: Board,
+    slots: list[Slot],
+    offset: int,
+    interval: int,
     max_load: int,
     peak_load: int,
-    allow_collision: bool = False,
+    allow_collision: bool,
 ) -> float:
     score = 0.0
-    load = Counter(slot.minute for slot in placed if slot.minute is not None)
-    first = defaultdict(Counter)
-    for slot in placed:
-        if slot.minute is not None:
-            first[slot.minute][slot.entry.first_control] += 1
-    for slot in candidate:
-        assert slot.minute is not None
-        load[slot.minute] += 1
-        if load[slot.minute] > peak_load:
+    squares = 0
+    for index, slot in enumerate(slots):
+        minute = offset + index * interval
+        load = board.load[minute] + 1
+        if load > peak_load:
             return math.inf
-        if load[slot.minute] > max_load:
-            score += (load[slot.minute] - max_load) * 100
-        first[slot.minute][slot.entry.first_control] += 1
-        if slot.entry.first_control and first[slot.minute][slot.entry.first_control] > 1:
+        if load > max_load:
+            score += (load - max_load) * 100
+        control = slot.entry.first_control
+        if control and board.first[minute][control] > 0:
             if not allow_collision:
                 return math.inf
             score += 1000
-    score += sum(value * value for value in load.values()) * 0.1
-    score += request_penalty(candidate)
-    return score
+        squares += 2 * load - 1  # increase of sum(load^2)
+        entry = slot.entry
+        if entry.request_minute is not None:
+            weight = entry.request_weight or 1.0
+            if entry.request_kind == "early":
+                score += max(0, minute - entry.request_minute) * weight
+            elif entry.request_kind == "late":
+                score += max(0, entry.request_minute - minute) * weight
+            elif entry.request_kind == "exact":
+                score += abs(minute - entry.request_minute) * weight * 2
+    return score + squares * 0.1
 
 
 def best_placement(
-    placed: list[Slot],
+    board: Board,
     slots: list[Slot],
     interval: int,
     window: int,
@@ -568,65 +606,108 @@ def best_placement(
     allow_collision: bool,
 ) -> tuple[list[Slot] | None, float]:
     span = (len(slots) - 1) * interval if slots else 0
-    latest_offset = max(0, window - span)
     best_score = math.inf
-    best_candidate: list[Slot] | None = None
-    for offset in range(0, latest_offset + 1):
-        candidate = [
-            Slot(entry=slot.entry, category_position=slot.category_position, minute=offset + index * interval)
-            for index, slot in enumerate(slots)
-        ]
-        score = evaluate(placed, candidate, max_load, peak_load, allow_collision)
+    best_offset: int | None = None
+    for offset in range(0, max(0, window - span) + 1):
+        score = offset_score(board, slots, offset, interval, max_load, peak_load, allow_collision)
         if score < best_score:
-            best_score = score
-            best_candidate = candidate
-    return best_candidate, best_score
+            best_score, best_offset = score, offset
+    if best_offset is None:
+        return None, math.inf
+    return [
+        Slot(entry=slot.entry, category_position=slot.category_position, minute=best_offset + index * interval)
+        for index, slot in enumerate(slots)
+    ], best_score
 
 
-def over_max_load(placed: list[Slot], candidate: list[Slot], max_load: int) -> bool:
-    load = Counter(slot.minute for slot in placed if slot.minute is not None)
-    for slot in candidate:
-        load[slot.minute] += 1
-    return any(load[slot.minute] > max_load for slot in candidate)
+@dataclass
+class Placement:
+    slots: list[Slot]
+    failed: str | None
+    over_max: int
+    collisions: int
+
+
+def place_all(
+    order: list[str],
+    slots_by_category: dict[str, list[Slot]],
+    intervals: dict[str, int],
+    window: int,
+    max_load: int,
+    peak_load: int,
+    allow_collision: bool,
+) -> Placement:
+    board = Board()
+    placed: list[Slot] = []
+    for category in order:
+        candidate, score = best_placement(
+            board, slots_by_category[category], intervals[category], window, max_load, peak_load, allow_collision
+        )
+        if candidate is None or math.isinf(score):
+            return Placement(placed, category, 0, 0)
+        board.add(candidate)
+        placed.extend(candidate)
+    over_max = sum(1 for value in board.load.values() if value > max_load)
+    collisions = sum(count - 1 for counter in board.first.values() for count in counter.values() if count > 1)
+    return Placement(placed, None, over_max, collisions)
+
+
+def auto_window(slots_by_category: dict[str, list[Slot]], config: dict) -> int:
+    """Contained start window: long enough for the longest category at its minimum interval and for
+    an average load of `target_load` starters per minute (default 5, the middle of FISO's 4-6)."""
+    total = sum(len(slots) for slots in slots_by_category.values())
+    target = float(config.get("target_load", 5))
+    longest = max(((len(slots) - 1) * interval_for(config, category) for category, slots in slots_by_category.items()), default=0)
+    return max(longest, math.ceil(total / target) - 1)
 
 
 def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list[Slot]:
-    window = int(config.get("window_minutes", 90))
+    raw_window = config.get("window_minutes", "auto")
+    automatic = str(raw_window).lower() == "auto"
+    window = auto_window(slots_by_category, config) if automatic else int(raw_window)
     max_load = int(config.get("max_load", 6))
     peak_load = int(config.get("peak_load", max(8, max_load)))
     allow_collision = bool(config.get("allow_first_control_collision", False))
-    placed: list[Slot] = []
-    categories = sorted(
-        slots_by_category,
-        key=lambda category: (-len(slots_by_category[category]), category),
-    )
-    chosen_intervals: dict[str, int] = {}
-    for category in categories:
-        slots = slots_by_category[category]
-        min_interval = interval_for(config, category)
-        best_candidate: list[Slot] | None = None
-        best_score = math.inf
-        # Try the widest allowed interval first; keep it only if it fits the window without
-        # pushing any minute over max_load. Otherwise fall back to the minimum interval.
-        for interval in range(max_interval_for(config, category), min_interval - 1, -1):
-            candidate, score = best_placement(placed, slots, interval, window, max_load, peak_load, allow_collision)
-            span = (len(slots) - 1) * interval if slots else 0
-            fits = (
-                candidate is not None
-                and not math.isinf(score)
-                and span <= window
-                and not over_max_load(placed, candidate, max_load)
-            )
-            if fits or interval == min_interval:
-                best_candidate, best_score = candidate, score
-                chosen_intervals[category] = interval
-                break
-        if best_candidate is None or math.isinf(best_score):
-            raise RuntimeError(
-                f"Cannot place category {category!r}; increase window, load limit, interval, or start lanes."
-            )
-        placed.extend(best_candidate)
-    config["_chosen_intervals"] = chosen_intervals
+    order = sorted(slots_by_category, key=lambda category: (-len(slots_by_category[category]), category))
+    intervals = {category: interval_for(config, category) for category in order}
+
+    # 1. Minimum intervals must fit. An automatic window grows (5% steps) until they do.
+    result = place_all(order, slots_by_category, intervals, window, max_load, peak_load, allow_collision)
+    while result.failed and automatic and window < 24 * 60:
+        window = math.ceil(window * 1.05) + 1
+        result = place_all(order, slots_by_category, intervals, window, max_load, peak_load, allow_collision)
+    if result.failed:
+        raise RuntimeError(
+            f"Cannot place category {result.failed!r}; increase window, load limit, interval, or start lanes."
+        )
+
+    # 2. Widen intervals inside the same window ("water filling"): repeatedly give +1 minute to the
+    #    category with the smallest interval, keeping the change only if every category still fits,
+    #    no minute gets more over max_load and no first-control collision is added.
+    caps = {}
+    for category in order:
+        gaps = max(1, len(slots_by_category[category]) - 1)
+        caps[category] = max(intervals[category], min(max_interval_for(config, category), window // gaps))
+    frozen = {category for category in order if intervals[category] >= caps[category]}
+    while len(frozen) < len(order):
+        category = min(
+            (c for c in order if c not in frozen),
+            key=lambda c: (intervals[c], -len(slots_by_category[c]), c),
+        )
+        intervals[category] += 1
+        trial = place_all(order, slots_by_category, intervals, window, max_load, peak_load, allow_collision)
+        if trial.failed or trial.over_max > result.over_max or trial.collisions > result.collisions:
+            intervals[category] -= 1
+            frozen.add(category)
+            continue
+        result = trial
+        if intervals[category] >= caps[category]:
+            frozen.add(category)
+
+    config["_chosen_intervals"] = intervals
+    config["_window"] = window
+    config["_window_auto"] = automatic
+    placed = result.slots
     placed.sort(key=lambda slot: (slot.minute if slot.minute is not None else -1, slot.entry.category, slot.category_position))
     return placed
 
@@ -721,7 +802,11 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
                 f"{sum(1 for value in load.values() if value > int(config.get('max_load', 6)))}",
             ]
         )
-        window_target = int(config.get("window_minutes", 90))
+        window_target = int(config.get("_window", config.get("window_minutes", 90)))
+        lines.append(
+            f"Target window: {window_target} minutes"
+            + (" (computed automatically)" if config.get("_window_auto") else " (window_minutes)")
+        )
         if max(load) > window_target:
             lines.append(
                 f"WARNING: last start at minute {max(load)} exceeds window_minutes={window_target}; "
@@ -773,6 +858,16 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
         else:
             seeding = "no ranking, not randomized"
         notes = []
+        ordered_rows = sorted(
+            (row for row in cat_rows if row["row_type"] == "assigned"), key=lambda row: int(row["category_position"])
+        )
+        same_club = sum(
+            1 for left, right in zip(ordered_rows, ordered_rows[1:]) if left["club"] and left["club"] == right["club"]
+        )
+        if same_club:
+            notes.append(f"{same_club} same-club neighbours")
+        if not config.get("_club_separation", {}).get(category, True):
+            notes.append("club separation off")
         repeated = config.get("_repeated_pairs", {}).get(category)
         if config.get("_previous_pairs") and repeated is not None:
             notes.append(f"{repeated} consecutive pairs repeated from previous races")

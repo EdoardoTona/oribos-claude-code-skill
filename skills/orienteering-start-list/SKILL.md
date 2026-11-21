@@ -48,7 +48,8 @@ Italian events from 2027 follow extra FISO guidelines; read `references/fiso-202
 
 - Same limits as before: contained window, 4-6 starters per minute, never more than 8.
 - Master categories (35+): minimum interval 2 minutes in sprint, 3 minutes in other races.
-- In non-sprint races every category gets the widest interval the window allows (4-7 minutes are fine), constant within the category; the total window does not grow.
+- In non-sprint races every category gets the widest interval the window allows (4-7 minutes are fine), constant within the category; the total window does not grow. The script picks the intervals itself, sharing the room fairly between categories.
+- No same-club athletes one after the other, except in very small categories; in seeded categories only within the same strength group/block.
 - Ranked categories (Coppa Italia, lista base): randomize within about 3 strength groups; elite categories within blocks of 5 or 10 so the strongest stay at the end.
 - Every category may have its own course: more distinct first controls to check, nothing else changes for the start list.
 
@@ -74,7 +75,7 @@ Use this priority unless the organizer changes it:
 3. Fixed race rules: interval, free-start categories, seeded category requirements.
 4. Strong timing requests: childcare, transport, organiser-approved exact needs.
 5. Category window and total race window.
-6. Separate same-club runners within category when possible.
+6. Separate same-club runners within category when possible (inside the shuffle scope for seeded categories; skipped for categories with fewer than 4 athletes).
 7. Soft early/late preferences and aesthetic balance.
 
 If the constraints do not fit, explain the tradeoff and adjust the window, load limit, intervals, or number of start lanes rather than silently breaking hard constraints.
