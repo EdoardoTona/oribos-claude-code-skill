@@ -525,6 +525,31 @@ def vacant_entry(category: str, course: str, first_control: str, index: int) -> 
     )
 
 
+def relax_large_masters(entries: list[Entry], config: dict) -> None:
+    """FISO 2027 master minimum (3 minutes outside sprint) on a very large master category can make
+    the whole grid far longer than entries and load need (e.g. 65 athletes x 3 min = 192 minutes).
+    For such categories propose 2 minutes instead, only for that category, and report it."""
+    if ruleset(config) != FISO_2027 or race_type(config) == "sprint":
+        return
+    grid = [entry for entry in entries if entry.row_type == "assigned"]
+    per_category = Counter(entry.category for entry in grid)
+    per_lane = Counter(entry.start_lane for entry in grid)
+    if "target_load" in config:
+        target = float(config["target_load"])
+    else:
+        target = float(config.get("max_load", 6)) - (1.5 if len(per_lane) >= int(config.get("many_starts", 3)) else 0.5)
+    load_window = math.ceil(max(per_lane.values(), default=0) / max(1.0, target)) - 1
+    large = int(config.get("master_large_category", 50))
+    for category, count in per_category.items():
+        cfg = category_config(config, category)
+        if not is_master(config, category) or count < large or "interval" in cfg or "min_interval" in cfg:
+            continue
+        slots = count + int(config.get("default_vacants", 2) or 0)
+        if (slots - 1) * min_interval_for(config, category) > load_window:
+            config.setdefault("categories", {}).setdefault(category, {})["min_interval"] = 2
+            config.setdefault("_relaxed_masters", {})[category] = (count, (slots - 1) * 3, load_window)
+
+
 def build_category_slots(entries: list[Entry], config: dict) -> dict[str, list[Slot]]:
     by_category: dict[str, list[Entry]] = defaultdict(list)
     for entry in entries:
@@ -598,6 +623,13 @@ def relation_penalty(all_slots: list[Slot], config: dict) -> float:
     return penalty
 
 
+def leg_key(entry: Entry) -> str:
+    """First leg = start + first control. Two starters from different starts heading to the same first
+    control run different legs and do not follow each other, so only the same start + first control
+    in the same minute counts as a collision."""
+    return f"{entry.start_lane}|{entry.first_control}" if entry.first_control else ""
+
+
 class Board:
     """Start load and first controls per minute of the categories placed so far."""
 
@@ -610,7 +642,7 @@ class Board:
             assert slot.minute is not None
             self.load[(slot.entry.start_lane, slot.minute)] += 1
             if slot.entry.first_control:
-                self.first[slot.minute][slot.entry.first_control] += 1
+                self.first[slot.minute][leg_key(slot.entry)] += 1
 
 
 def offset_score(
@@ -632,7 +664,7 @@ def offset_score(
             return math.inf
         if load > max_load:
             score += (load - max_load) * 100
-        control = slot.entry.first_control
+        control = leg_key(slot.entry)
         if control and board.first[minute][control] > 0:
             if not allow_collision:
                 return math.inf
@@ -716,7 +748,7 @@ def place_all(
 def first_control_bound(slots_by_category: dict[str, list[Slot]]) -> int:
     """At most one starter per first control per minute: the busiest first control needs this many minutes."""
     counts = Counter(
-        slot.entry.first_control for slots in slots_by_category.values() for slot in slots if slot.entry.first_control
+        leg_key(slot.entry) for slots in slots_by_category.values() for slot in slots if slot.entry.first_control
     )
     return max(counts.values(), default=1) - 1
 
@@ -739,6 +771,8 @@ def auto_window(slots_by_category: dict[str, list[Slot]], config: dict, include_
     total = max(per_lane.values(), default=0)  # the busiest start sets the pace
     target = target_load(slots_by_category, config)
     longest = max(((len(slots) - 1) * interval_for(config, category) for category, slots in slots_by_category.items()), default=0)
+    # Several long categories cannot all start in the first minutes while the start ramps up.
+    longest += len(config.get("ramp_up", [1, 2, 4]))
     bound = 0
     if include_first_controls and not config.get("allow_first_control_collision"):
         bound = first_control_bound(slots_by_category)
@@ -752,7 +786,7 @@ def candidate_orders(slots_by_category: dict[str, list[Slot]], intervals: dict[s
     names = sorted(slots_by_category)
     size = {c: len(slots_by_category[c]) for c in names}
     span = {c: (size[c] - 1) * intervals[c] for c in names}
-    first = {c: (slots_by_category[c][0].entry.first_control if slots_by_category[c] else "") for c in names}
+    first = {c: (leg_key(slots_by_category[c][0].entry) if slots_by_category[c] else "") for c in names}
     pressure = Counter()
     for c in names:
         pressure[first[c]] += size[c]
@@ -788,7 +822,7 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     orders = candidate_orders(slots_by_category, intervals, int(config.get("random_seed", 1)), attempts)
 
     fc_count = Counter(
-        slot.entry.first_control for slots in slots_by_category.values() for slot in slots if slot.entry.first_control
+        leg_key(slot.entry) for slots in slots_by_category.values() for slot in slots if slot.entry.first_control
     )
 
     def busy(window: int) -> frozenset[str]:
@@ -796,7 +830,7 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
         return frozenset(
             category
             for category, slots in slots_by_category.items()
-            if slots and fc_count[slots[0].entry.first_control] > 0.6 * (window + 1)
+            if slots and fc_count[leg_key(slots[0].entry)] > 0.6 * (window + 1)
         )
 
     mode = {"packed": frozenset()}
@@ -823,15 +857,23 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     groups: dict[str, list[str]] = defaultdict(list)
     for category, slots in slots_by_category.items():
         if slots and slots[0].entry.first_control:
-            groups[slots[0].entry.first_control].append(category)
+            groups[leg_key(slots[0].entry)].append(category)
 
-    def harmonized(window: int) -> dict[str, int]:
-        """Categories sharing a first control get the group's largest interval (where it still fits the
-        window): mixed intervals such as 2 and 3 minutes on one first control collide every other start."""
+    def harmonized(window: int, mode: str) -> dict[str, int]:
+        """Make intervals of categories sharing a start + first control compatible. Two categories never
+        collide when their intervals share a factor (2 and 4, 3 and 6), while 2 and 3 collide every other
+        start. mode "even": raise odd intervals to the next even one (3 -> 4) so they fit between the
+        2-minute categories; mode "max": give everyone the group's largest interval."""
         result = dict(base_intervals)
         for members in groups.values():
-            target = max(base_intervals[c] for c in members)
+            values = {base_intervals[c] for c in members}
+            if len(values) < 2 or all(math.gcd(a, b) > 1 for a in values for b in values):
+                continue
             for c in members:
+                if mode == "even":
+                    target = base_intervals[c] + (base_intervals[c] % 2)
+                else:
+                    target = max(values)
                 if (len(slots_by_category[c]) - 1) * target <= window:
                     result[c] = target
         return result
@@ -848,8 +890,10 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
         found = first_fit(window)
         if found is not None and not acceptable(found):
             found = None
-        if found is None:
-            aligned = harmonized(window)
+        for mode in ("even", "max"):
+            if found is not None:
+                break
+            aligned = harmonized(window, mode)
             if aligned != base_intervals:
                 intervals.update(aligned)
                 found = first_fit(window)
@@ -857,6 +901,11 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                     found = None
                 if found is None:
                     intervals.update(base_intervals)
+                else:
+                    config["_aligned"] = {
+                        c: (base_intervals[c], aligned[c], sorted(m for m in groups[leg_key(slots_by_category[c][0].entry)] if m != c))
+                        for c in aligned if aligned[c] != base_intervals[c]
+                    }
         return found
 
     # Acceptable length: what entries, load and the longest category need, ignoring first controls.
@@ -1012,12 +1061,13 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
     lanes = sorted({lane for lane, _ in lane_load})
     first_counts = defaultdict(Counter)
     for row in assigned:
-        first_counts[int(row["minute"])][row["first_control"]] += 1
+        if row["first_control"]:
+            first_counts[int(row["minute"])][(row.get("start") or "1", row["first_control"])] += 1
     collisions = [
-        (minute, first, count)
+        (minute, f"{first} (start {lane})", count)
         for minute, counter in first_counts.items()
-        for first, count in counter.items()
-        if first and count > 1
+        for (lane, first), count in counter.items()
+        if count > 1
     ]
     lines = [
         "Orienteering start list proposal",
@@ -1133,7 +1183,13 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
             notes.append(f"{repeated} consecutive pairs repeated from previous races")
         if minimum and base < minimum:
             notes.append(f"raised from {base} to ruleset minimum {minimum}")
-        if interval > max(base, minimum):
+        aligned = config.get("_aligned", {}).get(category)
+        if aligned:
+            notes.append(
+                f"interval raised from {aligned[0]} to {aligned[1]} to match the categories sharing its start and first "
+                f"control ({', '.join(aligned[2])}): 2 and 3 minutes on the same first control collide every other start"
+            )
+        elif interval > max(base, minimum):
             notes.append("widened because the window allowed it")
         lines.append(
             f"- {category}: {len(cat_rows)} slots, interval {interval} min, "
@@ -1157,6 +1213,13 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
         )
         if peak and max(peak.values()) > 8:
             warnings.append(f"WARNING: peak load {max(peak.values())} exceeds the FISO limit of 8 per minute per start.")
+    for category, (count, span, load_window) in sorted(config.get("_relaxed_masters", {}).items()):
+        warnings.append(
+            f"WARNING: {category} has {count} athletes: at the FISO master minimum of 3 minutes it alone would take "
+            f"{span} minutes, while entries and load need about {load_window}. Proposed minimum 2 minutes for this "
+            "category only; alternatives: split it over two starts, or accept a longer grid (set categories."
+            f"{category}.min_interval to 3)."
+        )
     if warnings:
         lines.append("")
         lines.extend(warnings)
@@ -1180,6 +1243,7 @@ def main() -> None:
         config["max_load"] = min(int(config.get("max_load", 6)), 8)
         config["peak_load"] = min(int(config.get("peak_load", 8)), 8)
     entries = load_entries(args.athletes, config)
+    relax_large_masters(entries, config)
     slots_by_category = build_category_slots(entries, config)
     assigned_slots = assign_times(slots_by_category, config)
     rows = build_rows(entries, assigned_slots, config)

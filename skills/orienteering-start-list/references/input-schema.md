@@ -90,6 +90,8 @@ Minimal example:
 - `categories.<name>.min_interval`: minimum interval for one category (works with any ruleset).
 - `window_minutes`: maximum total window. Omit it (or use `"auto"`) to compute a contained window from the longest category at minimum interval, the busiest first control and `target_load` starters per minute on average at the busiest start (default `max_load` − 0.5; `max_load` − 1.5 when there are `many_starts` = 3 or more starts). In automatic mode no minute may exceed `max_load` on any start (`auto_over_max_minutes`, default 0): the window grows a little instead.
 - `max_load` may be raised up to 8 under `fiso-2027` to shorten the grid.
+- `master_large_category` (default 50): under `fiso-2027`, larger master categories whose 3-minute span would exceed the load-based window get `min_interval` 2 with a warning.
+- First-control collisions are counted per start: the same first control used from different starts is not a collision.
 - `max_window_stretch` (default 1.25) and `first_control_realistic` (default 1.5): when first controls are too few for a collision-free grid of acceptable length, the fewest collisions are accepted and the report warns.
 - `ramp_up` (default `[1, 2, 4]`): maximum starters per start in the first minutes of the window, so the start can settle in; `[]` disables it.
 - `placement_attempts` (default 30): category orders tried when placing; the first is largest-category-first, then busiest-first-control-first, longest-span-first and seeded variations.
