@@ -867,7 +867,11 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     if automatic:
         acceptable_window = auto_window(slots_by_category, config, include_first_controls=False)
         limit = math.ceil(acceptable_window * float(config.get("max_window_stretch", 1.25)))
-        if fc_bound <= acceptable_window * float(config.get("first_control_realistic", 1.5)):
+        # A first-control bound is realistic if it is not far beyond what the whole event would need
+        # through a single start (separate starts shorten the window, but not a shared first control).
+        all_slots = sum(len(slots) for slots in slots_by_category.values())
+        single_start = max(acceptable_window, math.ceil(all_slots / target_load(slots_by_category, config)) - 1)
+        if fc_bound <= single_start * float(config.get("first_control_realistic", 1.5)):
             # The busiest first control is still realistic: prefer a slightly longer grid without collisions.
             limit = max(limit, math.ceil(fc_bound * 1.15))
     else:
@@ -1055,7 +1059,7 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         lines.extend(
             [
                 "",
-                f"WARNING: too few distinct first controls for this window. {fallback['collisions']} first-control "
+                f"WARNING: too few distinct first controls for this window. {len(collisions)} first-control "
                 f"collisions were accepted (the fewest found) to keep the grid at {fallback['window']} minutes.",
                 f"         A grid with no collisions would need at least {fallback['bound']} minutes "
                 "(busiest first control), which is not realistic.",
