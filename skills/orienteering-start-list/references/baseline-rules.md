@@ -64,7 +64,7 @@ Example:
 
 ## Tested On Past Races
 
-Recomputed with the current script on LiveResults data (app.liveresults.it): every grid category with the course and first control published for it, the start of its class, default vacants, no rankings (all categories random), automatic window, compact pace, `random_seed` 2027. "Real" is the published grid from its first to its last regular start (single changes more than 10 minutes away from the grid excluded); collisions are same start, same first control, same minute.
+The full benchmark on every 2025-2026 LiveResults race (with an independent validator and the exact optimum) is in `tests/start-list/results-2025-2026.md` of the plugin repository. A selection, recomputed with the current script on LiveResults data (app.liveresults.it): every grid category with the course and first control published for it, the start of its class, default vacants, no rankings (all categories random), automatic window, compact pace, `random_seed` 2027. "Real" is the published grid from its first to its last regular start (single changes more than 10 minutes away from the grid excluded); collisions are same start, same first control, same minute.
 
 | Race | Grid athletes | Starts | Script | Real grid |
 |---|---|---|---|---|

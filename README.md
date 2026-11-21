@@ -50,3 +50,5 @@ Builds start list proposals as reviewable CSV files plus a report (it never writ
 | `references/rules-iof.md`      | IOF start rules compared with the defaults (WRE)             |
 | `references/input-schema.md`   | Athletes CSV, config JSON options, output CSV                |
 | `scripts/build_start_list.py`  | Proposal generator (CSV + report)                            |
+
+Checks for the start-list script (independent validator, exact CP-SAT optimum, benchmark on LiveResults.it races) are in [`tests/start-list`](tests/start-list/README.md).
