@@ -1200,6 +1200,7 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
 
     def fit_window(window: int) -> tuple[list[str], Placement] | None:
         intervals.update(base_intervals)
+        config.pop("_aligned", None)  # the notes describe the last fit only, never an attempt left behind
         found = first_fit(window)
         if found is not None and not acceptable(found):
             found = None
@@ -1706,7 +1707,7 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
         if aligned:
             notes.append(
                 f"interval raised from {aligned[0]} to {aligned[1]} to match the categories sharing its start and first "
-                f"control ({', '.join(aligned[2])}): 2 and 3 minutes on the same first control collide every other start"
+                f"control ({', '.join(aligned[2])}): intervals without a common factor (2 and 3, 1 and 2) collide regularly on the same first control"
             )
         elif interval > start_interval:
             notes.append("widened because the window allowed it")

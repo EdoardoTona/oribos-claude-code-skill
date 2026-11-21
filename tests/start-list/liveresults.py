@@ -127,7 +127,7 @@ def convert(data: dict, race_type: str, out_dir: Path, seed: int = 2027) -> dict
             "course": course, "first_control": first_control(course), "start": lane,
         })
         if not is_free(cls) and x.get("start"):
-            real.append((x["start"] // 60, lane, first_control(course)))
+            real.append((int(x["start"]) // 60, lane, first_control(course)))
     with (out_dir / "athletes.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()
