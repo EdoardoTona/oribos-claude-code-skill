@@ -1642,23 +1642,69 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     # 1c. Sensitive categories first: with the window fixed, try every category order and keep the one that
     #     starts the sensitive categories earliest, without more minutes over max_load or more collisions.
     #     A grid found by the local search is kept and its sensitive categories are moved earlier one at a time.
-    if sensitive and mode["repaired"]:
-        for category in sorted(sensitive):
-            trial = move_one(result, category, intervals[category])
-            if not trial.failed and (trial.over_max, trial.collisions, delay(trial)) < (result.over_max, result.collisions, delay(result)):
-                result = trial
-    elif sensitive:
-        best_key = (result.over_max, result.collisions, delay(result))
-        modes = [mode["packed"]] + [m for m in (frozenset(), frozenset(slots_by_category)) if m != mode["packed"]]
-        for packed in modes:
-            for candidate_order in orders:
-                trial = place(candidate_order, window, packed)
-                if trial.failed:
-                    continue
-                key = (trial.over_max, trial.collisions, delay(trial))
-                if key < best_key:
-                    best_key, order, result = key, candidate_order, trial
-                    mode["packed"] = packed
+    def polish_sensitive(order: list[str], result: Placement) -> tuple[list[str], Placement]:
+        if sensitive and mode["repaired"]:
+            for category in sorted(sensitive):
+                trial = move_one(result, category, intervals[category])
+                if not trial.failed and (trial.over_max, trial.collisions, delay(trial)) < (result.over_max, result.collisions, delay(result)):
+                    result = trial
+        elif sensitive:
+            best_key = (result.over_max, result.collisions, delay(result))
+            modes = [mode["packed"]] + [m for m in (frozenset(), frozenset(slots_by_category)) if m != mode["packed"]]
+            for packed in modes:
+                for candidate_order in orders:
+                    trial = place(candidate_order, window, packed)
+                    if trial.failed:
+                        continue
+                    key = (trial.over_max, trial.collisions, delay(trial))
+                    if key < best_key:
+                        best_key, order, result = key, candidate_order, trial
+                        mode["packed"] = packed
+        return order, result
+
+    def late_sensitive(placement: Placement) -> list[str]:
+        first: dict[str, int] = {}
+        for slot in placement.slots:
+            if slot.entry.category in sensitive and slot.minute is not None:
+                first[slot.entry.category] = min(first.get(slot.entry.category, slot.minute), slot.minute)
+        return sorted(c for c, minute in first.items() if minute > window // 4)
+
+    order, result = polish_sensitive(order, result)
+
+    # 1d. Sensitive categories still starting after the first quarter: an automatic grid may run up to
+    #     `sensitive_window_tolerance` (default 3) minutes longer if that lets (more of) them start in it.
+    tolerance = int(config.get("sensitive_window_tolerance", 3)) if automatic else 0
+    late = (
+        late_sensitive(result)
+        if sensitive and tolerance > 0 and fallback is None and not allow_collision and "_compacted" not in config
+        else []
+    )
+    if late:
+        base_window, base_order, base_result, base_state = window, order, result, snapshot()
+        chosen = None
+        for longer in range(base_window + 1, base_window + tolerance + 1):
+            window = longer
+            found_longer = fit_window(longer)
+            if found_longer is None:
+                continue
+            trial_order, trial = polish_sensitive(*found_longer)
+            still = late_sensitive(trial)
+            if trial.over_max <= base_result.over_max and len(still) < len(late) and (chosen is None or len(still) < len(chosen[4])):
+                chosen = (longer, trial_order, trial, snapshot(), still)
+                if not still:
+                    break
+        if chosen is not None:
+            window, order, result = chosen[:3]
+            restore(chosen[3])
+            config["_sensitive_longer"] = {
+                "from": base_window, "to": window, "categories": [c for c in late if c not in chosen[4]],
+            }
+            for key in ("_overflow", "_overflow_load"):
+                if key in config:
+                    config[key]["grown"] = window
+        else:
+            window, order, result = base_window, base_order, base_result
+            restore(base_state)
 
     # 2. Widen intervals inside the same window ("water filling"): repeatedly give +1 minute to the
     #    category with the smallest interval, keeping the change only if every category still fits,
@@ -1854,6 +1900,16 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
                 f"NOTE: {len(overflow['categories'])} categories did not fit the {overflow['window']}-minute window "
                 f"({', '.join(overflow['categories'][:8])}{'...' if len(overflow['categories']) > 8 else ''}): "
                 f"{reason}, so the grid runs {overflow['grown']} minutes.",
+            ]
+        )
+    longer = config.get("_sensitive_longer")
+    if longer:
+        lines.extend(
+            [
+                "",
+                f"NOTE: the grid runs {longer['to']} minutes instead of {longer['from']} so that these sensitive categories "
+                f"start in the first quarter: {', '.join(longer['categories'])} (sensitive_window_tolerance: up to "
+                f"{config.get('sensitive_window_tolerance', 3)} minutes longer for them; 0 keeps the shortest grid).",
             ]
         )
     overflow_load = config.get("_overflow_load")
