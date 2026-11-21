@@ -644,12 +644,15 @@ def best_placement(
     max_load: int,
     peak_load: int,
     allow_collision: bool,
+    pack: float = 0.0,
 ) -> tuple[list[Slot] | None, float]:
     span = (len(slots) - 1) * interval if slots else 0
     best_score = math.inf
     best_offset: int | None = None
     for offset in range(0, max(0, window - span) + 1):
-        score = offset_score(board, slots, offset, interval, max_load, peak_load, allow_collision)
+        # pack > 0 favours the earliest valid offset, so categories sharing a busy first control
+        # interleave without leaving holes on it (first fit) instead of spreading the load.
+        score = offset_score(board, slots, offset, interval, max_load, peak_load, allow_collision) + pack * offset
         if score < best_score:
             best_score, best_offset = score, offset
     if best_offset is None:
@@ -676,12 +679,14 @@ def place_all(
     max_load: int,
     peak_load: int,
     allow_collision: bool,
+    packed: frozenset[str] = frozenset(),
 ) -> Placement:
     board = Board()
     placed: list[Slot] = []
     for category in order:
         candidate, score = best_placement(
-            board, slots_by_category[category], intervals[category], window, max_load, peak_load, allow_collision
+            board, slots_by_category[category], intervals[category], window, max_load, peak_load, allow_collision,
+            pack=1.0 if category in packed else 0.0,
         )
         if candidate is None or math.isinf(score):
             return Placement(placed, category, 0, 0)
@@ -724,6 +729,9 @@ def candidate_orders(slots_by_category: dict[str, list[Slot]], intervals: dict[s
         pressure[first[c]] += size[c]
     orders = [
         sorted(names, key=lambda c: (-size[c], c)),
+        # Grouped by first control (busiest first), shortest interval first inside the group, so that
+        # categories sharing a first control interleave (two at 2 min fill every minute, three at 3 min...).
+        sorted(names, key=lambda c: (-pressure[first[c]], first[c], intervals[c], -size[c], c)),
         sorted(names, key=lambda c: (-pressure[first[c]], -span[c], c)),
         sorted(names, key=lambda c: (-span[c], -size[c], c)),
     ]
@@ -749,25 +757,73 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     attempts = int(config.get("placement_attempts", 30))
     orders = candidate_orders(slots_by_category, intervals, int(config.get("random_seed", 1)), attempts)
 
-    def place(order: list[str], window: int) -> Placement:
-        return place_all(order, slots_by_category, intervals, window, max_load, peak_load, allow_collision)
+    fc_count = Counter(
+        slot.entry.first_control for slots in slots_by_category.values() for slot in slots if slot.entry.first_control
+    )
+
+    def busy(window: int) -> frozenset[str]:
+        # Categories whose first control is used in more than 60% of the window's minutes.
+        return frozenset(
+            category
+            for category, slots in slots_by_category.items()
+            if slots and fc_count[slots[0].entry.first_control] > 0.6 * (window + 1)
+        )
+
+    mode = {"packed": frozenset()}
+
+    def place(order: list[str], window: int, packed: frozenset[str] | None = None) -> Placement:
+        packed = mode["packed"] if packed is None else packed
+        return place_all(order, slots_by_category, intervals, window, max_load, peak_load, allow_collision, packed)
 
     def first_fit(window: int, preferred: list[str] | None = None) -> tuple[list[str], Placement] | None:
         tried = [preferred] if preferred else []
-        for order in tried + [o for o in orders if o != preferred]:
-            result = place(order, window)
-            if not result.failed:
-                return order, result
+        everything = frozenset(slots_by_category)
+        modes = [mode["packed"]] + [m for m in (frozenset(), busy(window), everything) if m != mode["packed"]]
+        for packed in modes:
+            for order in tried + [o for o in orders if o != preferred]:
+                result = place(order, window, packed)
+                if not result.failed:
+                    mode["packed"] = packed
+                    return order, result
         return None
 
     # 1. Minimum intervals must fit, trying several category orders. An automatic window grows
     #    (3% steps) until they do; a fixed window that cannot work reports the window that would.
-    found = first_fit(window)
+    base_intervals = dict(intervals)
+    groups: dict[str, list[str]] = defaultdict(list)
+    for category, slots in slots_by_category.items():
+        if slots and slots[0].entry.first_control:
+            groups[slots[0].entry.first_control].append(category)
+
+    def harmonized(window: int) -> dict[str, int]:
+        """Categories sharing a first control get the group's largest interval (where it still fits the
+        window): mixed intervals such as 2 and 3 minutes on one first control collide every other start."""
+        result = dict(base_intervals)
+        for members in groups.values():
+            target = max(base_intervals[c] for c in members)
+            for c in members:
+                if (len(slots_by_category[c]) - 1) * target <= window:
+                    result[c] = target
+        return result
+
+    def fit_window(window: int) -> tuple[list[str], Placement] | None:
+        intervals.update(base_intervals)
+        found = first_fit(window)
+        if found is None:
+            aligned = harmonized(window)
+            if aligned != base_intervals:
+                intervals.update(aligned)
+                found = first_fit(window)
+                if found is None:
+                    intervals.update(base_intervals)
+        return found
+
+    found = fit_window(window)
     if found is None:
         needed = window
         while found is None and needed < 24 * 60:
             needed = math.ceil(needed * 1.03) + 1
-            found = first_fit(needed)
+            found = fit_window(needed)
         if not automatic or found is None:
             hint = f" about {needed} minutes would be needed" if found else ""
             raise RuntimeError(
