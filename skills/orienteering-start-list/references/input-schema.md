@@ -92,7 +92,7 @@ Minimal example:
 - `max_load` may be raised up to 8 under `fiso-2027` to shorten the grid.
 - `master_large_category` (default 50): under `fiso-2027`, larger master categories whose 3-minute span would exceed the load-based window get `min_interval` 2 with a warning.
 - First-control collisions are counted per start: the same first control used from different starts is not a collision.
-- `max_window_stretch` (default 1.25) and `first_control_realistic` (default 1.5): when first controls are too few for a collision-free grid of acceptable length, the fewest collisions are accepted and the report warns.
+- `max_window_stretch` (default 1.25, at least `min_window_margin` = 20 minutes) and `first_control_realistic` (default 1.5, at least `first_control_margin` = 30 minutes): when first controls are too few for a collision-free grid of acceptable length, the fewest collisions are accepted and the report warns. The minute margins keep small races from falling back too early.
 - `ramp_up` (default `[1, 2, 4]`): maximum starters per start in the first minutes of the window, so the start can settle in; `[]` disables it.
 - `placement_attempts` (default 30): category orders tried when placing; the first is largest-category-first, then busiest-first-control-first, longest-span-first and seeded variations.
 - `max_interval` (global or per category) and `master_max_interval`: upper limit for widening. Intervals are widened one minute at a time, smallest first, while every category still fits the window without new minutes over `max_load` or new first-control collisions. With `fiso-2027` in non-sprint races, every category defaults to `fiso_max_interval` (7).

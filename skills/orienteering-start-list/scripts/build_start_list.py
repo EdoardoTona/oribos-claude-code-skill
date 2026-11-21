@@ -439,7 +439,7 @@ def improve_order(
         total = 0
         for left, right in zip(items, items[1:]):
             if club_separation and left.club and left.club == right.club:
-                total += 3
+                total += 50  # always worse than moving a few athletes to the adjacent group
             if frozenset((left.athlete_id, right.athlete_id)) in forbidden:
                 total += 1
         if reach:
@@ -915,12 +915,20 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     fc_bound = first_control_bound(slots_by_category)
     if automatic:
         acceptable_window = auto_window(slots_by_category, config, include_first_controls=False)
-        limit = math.ceil(acceptable_window * float(config.get("max_window_stretch", 1.25)))
+        # Percentages alone are too tight for small races: allow at least +20 minutes of search margin.
+        limit = max(
+            math.ceil(acceptable_window * float(config.get("max_window_stretch", 1.25))),
+            acceptable_window + int(config.get("min_window_margin", 20)),
+        )
         # A first-control bound is realistic if it is not far beyond what the whole event would need
         # through a single start (separate starts shorten the window, but not a shared first control).
         all_slots = sum(len(slots) for slots in slots_by_category.values())
         single_start = max(acceptable_window, math.ceil(all_slots / target_load(slots_by_category, config)) - 1)
-        if fc_bound <= single_start * float(config.get("first_control_realistic", 1.5)):
+        realistic = max(
+            single_start * float(config.get("first_control_realistic", 1.5)),
+            single_start + int(config.get("first_control_margin", 30)),
+        )
+        if fc_bound <= realistic:
             # The busiest first control is still realistic: prefer a slightly longer grid without collisions.
             limit = max(limit, math.ceil(fc_bound * 1.15))
     else:
