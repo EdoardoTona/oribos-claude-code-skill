@@ -721,15 +721,27 @@ def first_control_bound(slots_by_category: dict[str, list[Slot]]) -> int:
     return max(counts.values(), default=1) - 1
 
 
-def auto_window(slots_by_category: dict[str, list[Slot]], config: dict) -> int:
+def target_load(slots_by_category: dict[str, list[Slot]], config: dict) -> float:
+    """Average starters per minute per start used to size an automatic window: 5-6 (max_load - 0.5),
+    or 4-5 (max_load - 1.5) when the event runs 3 or more separate starts, which is harder to manage."""
+    if "target_load" in config:
+        return float(config["target_load"])
+    max_load = float(config.get("max_load", 6))
+    lanes = {slot.entry.start_lane for slots in slots_by_category.values() for slot in slots}
+    many = len(lanes) >= int(config.get("many_starts", 3))
+    return max(1.0, max_load - (1.5 if many else 0.5))
+
+
+def auto_window(slots_by_category: dict[str, list[Slot]], config: dict, include_first_controls: bool = True) -> int:
     """Contained start window: long enough for the longest category at its minimum interval, for the
-    busiest first control and for an average load of `target_load` starters per minute (default 5,
-    the middle of FISO's 4-6)."""
+    busiest first control and for the target average load per start."""
     per_lane = Counter(slot.entry.start_lane for slots in slots_by_category.values() for slot in slots)
     total = max(per_lane.values(), default=0)  # the busiest start sets the pace
-    target = float(config.get("target_load", 6 if race_type(config) == "sprint" else 5))
+    target = target_load(slots_by_category, config)
     longest = max(((len(slots) - 1) * interval_for(config, category) for category, slots in slots_by_category.items()), default=0)
-    bound = 0 if config.get("allow_first_control_collision") else first_control_bound(slots_by_category)
+    bound = 0
+    if include_first_controls and not config.get("allow_first_control_collision"):
+        bound = first_control_bound(slots_by_category)
     return max(longest, bound, math.ceil(total / target) - 1)
 
 
@@ -847,19 +859,47 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                     intervals.update(base_intervals)
         return found
 
-    found = fit_window(window)
-    if found is None:
-        needed = window
-        while found is None and needed < 24 * 60:
-            needed = math.ceil(needed * 1.03) + 1
+    # Acceptable length: what entries, load and the longest category need, ignoring first controls.
+    # Too few distinct first controls must not make the grid unrealistically long: beyond
+    # `max_window_stretch` (default +25%) the script accepts the fewest possible first-control
+    # collisions instead, and warns.
+    fc_bound = first_control_bound(slots_by_category)
+    if automatic:
+        acceptable_window = auto_window(slots_by_category, config, include_first_controls=False)
+        limit = math.ceil(acceptable_window * float(config.get("max_window_stretch", 1.25)))
+        if fc_bound <= acceptable_window * float(config.get("first_control_realistic", 1.5)):
+            # The busiest first control is still realistic: prefer a slightly longer grid without collisions.
+            limit = max(limit, math.ceil(fc_bound * 1.15))
+    else:
+        limit = window
+    fallback = None
+
+    def grow(start: int, stop: int) -> tuple[int, tuple[list[str], Placement] | None]:
+        needed, found = start, None
+        while found is None and needed < stop:
+            needed = min(stop, math.ceil(needed * 1.03) + 1)
             found = fit_window(needed)
-        if not automatic or found is None:
-            hint = f" about {needed} minutes would be needed" if found else ""
-            raise RuntimeError(
-                f"Cannot place all categories in window_minutes={window};{hint} — increase the window, "
-                "the load limit or the start lanes, or reduce intervals/vacants."
-            )
-        window = needed
+        return needed, found
+
+    found = None if (automatic and window > limit and not allow_collision) else fit_window(window)
+    if found is None and automatic and window <= limit:
+        window, found = grow(window, limit)
+    if found is None and not allow_collision:
+        # First-control fallback: same acceptable window, fewest collisions.
+        allow_collision = True
+        window = limit
+        found = fit_window(window)
+        if found is None and automatic:
+            window, found = grow(window, 24 * 60)
+        if found is not None:
+            fallback = {"bound": fc_bound, "window": window}
+    if found is None:
+        needed, hint_found = grow(window, 24 * 60)
+        hint = f" about {needed} minutes would be needed" if hint_found else ""
+        raise RuntimeError(
+            f"Cannot place all categories in window_minutes={window};{hint} — increase the window, "
+            "the load limit or the start lanes, or reduce intervals/vacants."
+        )
     order, result = found
 
     # 2. Widen intervals inside the same window ("water filling"): repeatedly give +1 minute to the
@@ -893,6 +933,10 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     config["_chosen_intervals"] = intervals
     config["_window"] = window
     config["_window_auto"] = automatic
+    config["_target_load"] = target_load(slots_by_category, config)
+    if fallback is not None:
+        fallback["collisions"] = result.collisions
+        config["_fc_fallback"] = fallback
     placed = result.slots
     placed.sort(key=lambda slot: (slot.minute if slot.minute is not None else -1, slot.entry.category, slot.category_position))
     return placed
@@ -1004,6 +1048,22 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
                 f"WARNING: last start at minute {max(load)} exceeds window_minutes={window_target}; "
                 "increase the window, load limit, or start lanes."
             )
+    if config.get("_window_auto"):
+        lines.append(f"Target average load per start for the automatic window: {config.get('_target_load')}")
+    fallback = config.get("_fc_fallback")
+    if fallback:
+        lines.extend(
+            [
+                "",
+                f"WARNING: too few distinct first controls for this window. {fallback['collisions']} first-control "
+                f"collisions were accepted (the fewest found) to keep the grid at {fallback['window']} minutes.",
+                f"         A grid with no collisions would need at least {fallback['bound']} minutes "
+                "(busiest first control), which is not realistic.",
+                "         Options: more distinct first controls (ask the course setter), more separate starts, "
+                "a longer window, or accept the collisions listed below.",
+                "",
+            ]
+        )
     lines.extend(
         [
             f"First-control collisions: {len(collisions)}",
@@ -1113,7 +1173,7 @@ def main() -> None:
         config["_previous_pairs"] = load_previous_pairs(previous, args.config.parent)
     if ruleset(config) == FISO_2027:
         # FISO 2027 keeps the 6 normal / 8 absolute per-minute limits; never allow more than 8.
-        config.setdefault("max_load", 6)
+        config["max_load"] = min(int(config.get("max_load", 6)), 8)
         config["peak_load"] = min(int(config.get("peak_load", 8)), 8)
     entries = load_entries(args.athletes, config)
     slots_by_category = build_category_slots(entries, config)

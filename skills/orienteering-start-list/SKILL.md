@@ -46,7 +46,8 @@ description: Create fair orienteering start list proposals as CSV files from ath
 
 Italian events from 2027 follow extra FISO guidelines; read `references/fiso-2027.md`. In short:
 
-- Same limits as before: contained window, 4-6 starters per minute, never more than 8 — per physical start (separate starts each have that throughput; read each category's start from the event data). Sprint may run at 6 per minute. Ramp up each start gradually (1, 2, 4, then normal pace).
+- Same limits as before: contained window, 4-6 starters per minute, never more than 8 — per physical start (separate starts each have that throughput; read each category's start from the event data). 5 or 6 per minute is fine for every race type; with 3 or more separate starts aim a bit lower (4-5 per start), but 6 with short peaks up to 8 is always acceptable when the window must stay within a maximum length. The organizer may raise the limit (up to 8) to shorten a long grid. Ramp up each start gradually (1, 2, 4, then normal pace) in every race.
+- Too few distinct first controls must not produce an unrealistic grid: the script keeps an acceptable length, accepts the fewest first-control collisions and warns; tell the organizer and let them decide (more first controls, more starts, longer window, or accept).
 - Master categories (35+): minimum interval 2 minutes in sprint, 3 minutes in other races.
 - In non-sprint races every category gets the widest interval the window allows (4-7 minutes are fine), constant within the category; the total window does not grow. The script picks the intervals itself, sharing the room fairly between categories.
 - No same-club athletes one after the other, except in very small categories; in seeded categories first within the same strength group/block, otherwise moving an athlete to the adjacent group/block.
