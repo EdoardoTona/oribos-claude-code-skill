@@ -227,12 +227,17 @@ def max_interval_for(config: dict, category: str) -> int:
     if "max_interval" in cfg:
         return max(base, int(cfg["max_interval"]))
     if is_master(config, category) and "master_max_interval" in config:
-        return max(base, int(config["master_max_interval"]))
-    if "max_interval" in config:
-        return max(base, int(config["max_interval"]))
-    if race_type(config) == "sprint":
-        return max(base, int(config.get("sprint_max_interval", 4)))
-    return max(base, 7)
+        limit = int(config["master_max_interval"])
+    elif "max_interval" in config:
+        limit = int(config["max_interval"])
+    elif race_type(config) == "sprint":
+        limit = int(config.get("sprint_max_interval", 4))
+    else:
+        limit = 7
+    if is_sensitive(config, category):
+        # Sensitive categories start early and should also finish early: at most 4 minutes between starters.
+        limit = min(limit, int(config.get("sensitive_max_interval", 4)))
+    return max(base, limit)
 
 
 def category_config(config: dict, category: str) -> dict:
