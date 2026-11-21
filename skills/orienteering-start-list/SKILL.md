@@ -9,7 +9,8 @@ description: Create fair orienteering start list proposals as CSV files from ath
 
 1. Gather the race facts before calculating:
    - Race type: sprint, middle, long, or custom interval.
-   - Country/ruleset: for Italian (FISO) events from 2027, read `references/fiso-2027.md` and set `"ruleset": "fiso-2027"` — masters 35+ need at least 2 minutes (sprint) / 3 minutes (other races) and ranked categories are randomized by strength groups.
+   - Country/ruleset: for Italian (FISO) events from 2027, read `references/fiso-2027.md` and set `"ruleset": "fiso-2027"` — masters 35+ need at least 2 minutes (sprint) / 3 minutes (other races), non-sprint categories are widened up to 7 minutes when the window allows, and ranked categories are randomized by strength groups.
+   - Previous races of the same weekend/multi-day event: their proposal CSVs, to avoid repeating consecutive pairs.
    - First start time and desired total window. Scale the window with entries: 80-90 minutes is reasonable for a few hundred middle-distance runners; 800 runners may need 150-220 minutes or multiple start lanes.
    - Start interval: sprint usually 1 minute, middle usually 2 minutes, long 2 or 3 minutes (often the same as middle; confirm with the organizer). Oribos also supports 30-second intervals.
    - Maximum start load per minute: prefer fewer; 6 average/normal maximum is manageable, short peaks of 7-8 (occasionally 9 in large events) may be acceptable, higher usually requires more physical start lanes/corridors.
@@ -46,7 +47,8 @@ description: Create fair orienteering start list proposals as CSV files from ath
 Italian events from 2027 follow extra FISO guidelines; read `references/fiso-2027.md`. In short:
 
 - Same limits as before: contained window, 4-6 starters per minute, never more than 8.
-- Master categories (35+): minimum interval 2 minutes in sprint, 3 minutes in other races; larger intervals are welcome when entries and window allow.
+- Master categories (35+): minimum interval 2 minutes in sprint, 3 minutes in other races.
+- In non-sprint races every category gets the widest interval the window allows (4-7 minutes are fine), constant within the category; the total window does not grow.
 - Ranked categories (Coppa Italia, lista base): randomize within about 3 strength groups; elite categories within blocks of 5 or 10 so the strongest stay at the end.
 - Every category may have its own course: more distinct first controls to check, nothing else changes for the start list.
 
@@ -59,6 +61,7 @@ These rules are Italy-specific; do not apply them to other countries or IOF/WRE 
 - If the ranking source uses points where higher is better, sort by ascending points for start order.
 - If both position and points exist, position is normally primary.
 - For multi-race weekends, seeded classes are randomized within strength blocks (commonly 5 or 10) to avoid identical grids across races while keeping the ranking ladder; do not fully shuffle a seeded class. Unseeded classes are commonly fully reshuffled each race.
+- In weekends with two races and multi-day events, avoid repeating neighbours: two athletes who started consecutively in a previous race should not be consecutive again in the same category. Pass the previous proposals with `previous_start_lists`; the script swaps athletes only inside their shuffle scope and reports any unavoidable repeats.
 - In multi-day events, use different seeds per stage/race and verify cross-stage uniqueness after building proposals. Compare each category's common athletes between stages; if the full order or the last meaningful block (for example the final 5 starters) repeats, reshuffle unless this was explicitly requested.
 - Put vacants at the end of the category unless the organizer explicitly asks otherwise; Oribos-generated grids always place them at the end.
 

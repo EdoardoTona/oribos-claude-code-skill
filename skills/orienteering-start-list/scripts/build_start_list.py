@@ -146,6 +146,9 @@ def max_interval_for(config: dict, category: str) -> int:
         return max(base, int(config["master_max_interval"]))
     if "max_interval" in config:
         return max(base, int(config["max_interval"]))
+    if ruleset(config) == FISO_2027 and race_type(config) != "sprint":
+        # FISO 2027: in non-sprint races every category may get a wider (constant) interval, up to 7 minutes.
+        return max(base, int(config.get("fiso_max_interval", 7)))
     return base
 
 
@@ -328,9 +331,115 @@ def order_category(entries: list[Entry], config: dict, category: str) -> list[En
         randomized_unseeded = True
 
     separate_default = not has_seed_policy
-    if bool(cfg.get("separate_clubs", config.get("separate_clubs", separate_default))):
+    club_separation = bool(cfg.get("separate_clubs", config.get("separate_clubs", separate_default)))
+    if club_separation:
         ordered = separate_clubs(ordered, preserve_input_ties=randomized_unseeded)
+
+    forbidden = config.get("_previous_pairs", set())
+    if forbidden and bool(cfg.get("avoid_repeated_pairs", config.get("avoid_repeated_pairs", True))):
+        if has_seed_policy:
+            policy, size = seeding_policy(config, category)
+            segments = segment_ids(len(ordered), policy, size)
+        elif randomized_unseeded:
+            segments = [0] * len(ordered)
+        else:
+            segments = None
+        if segments is not None:
+            ordered = avoid_repeated_pairs(ordered, segments, forbidden, club_separation, seed + 7919)
+    config.setdefault("_repeated_pairs", {})[category] = sum(
+        1 for left, right in zip(ordered, ordered[1:]) if frozenset((left.athlete_id, right.athlete_id)) in forbidden
+    )
     return ordered
+
+
+def segment_ids(size: int, policy: str, value: int) -> list[int] | None:
+    """Shuffle scope of each position: athletes may only be swapped inside the same segment."""
+    if policy == "block" and value > 1:
+        ids = [0] * size
+        stop, segment = size, 0
+        while stop > 0:
+            start = max(0, stop - value)
+            for index in range(start, stop):
+                ids[index] = segment
+            stop, segment = start, segment + 1
+        return ids
+    if policy == "groups" and value > 1:
+        ids = [0] * size
+        for group in range(value):
+            for index in range(round(group * size / value), round((group + 1) * size / value)):
+                ids[index] = group
+        return ids
+    return None
+
+
+def avoid_repeated_pairs(
+    order: list[Entry],
+    segments: list[int],
+    forbidden: set[frozenset[str]],
+    club_separation: bool,
+    seed: int,
+) -> list[Entry]:
+    """Local search: swap athletes inside their shuffle segment so that no two athletes who were
+    consecutive in a previous race are consecutive again. Same-club neighbours are a minor cost
+    when club separation is active."""
+    if len(order) < 3:
+        return order
+    rng = random.Random(seed)
+    result = order[:]
+
+    def cost(items: list[Entry]) -> int:
+        total = 0
+        for left, right in zip(items, items[1:]):
+            if frozenset((left.athlete_id, right.athlete_id)) in forbidden:
+                total += 100
+            elif club_separation and left.club and left.club == right.club:
+                total += 1
+        return total
+
+    current = cost(result)
+    members: dict[int, list[int]] = defaultdict(list)
+    for index, segment in enumerate(segments):
+        members[segment].append(index)
+    for _ in range(300 * len(result)):
+        if current < 100:
+            break
+        bad = [
+            index
+            for index in range(len(result) - 1)
+            if frozenset((result[index].athlete_id, result[index + 1].athlete_id)) in forbidden
+        ]
+        index = rng.choice(bad) + rng.randint(0, 1)
+        partners = [other for other in members[segments[index]] if other != index]
+        if not partners:
+            continue
+        other = rng.choice(partners)
+        result[index], result[other] = result[other], result[index]
+        candidate = cost(result)
+        if candidate <= current:
+            current = candidate
+        else:
+            result[index], result[other] = result[other], result[index]
+    return result
+
+
+def load_previous_pairs(paths: list[str], base: Path) -> set[frozenset[str]]:
+    """Consecutive athlete pairs (by athlete_id, vacants excluded) from earlier proposal CSVs."""
+    pairs: set[frozenset[str]] = set()
+    for raw in paths:
+        path = Path(raw)
+        if not path.is_absolute():
+            path = base / path
+        by_category: dict[str, list[tuple[int, str]]] = defaultdict(list)
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                if row.get("row_type") != "assigned" or not row.get("category_position"):
+                    continue
+                by_category[row["category"]].append((int(row["category_position"]), row["athlete_id"]))
+        for rows in by_category.values():
+            rows.sort()
+            for (_, left), (_, right) in zip(rows, rows[1:]):
+                pairs.add(frozenset((left, right)))
+    return pairs
 
 
 def vacant_entry(category: str, course: str, first_control: str, index: int) -> Entry:
@@ -664,6 +773,9 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
         else:
             seeding = "no ranking, not randomized"
         notes = []
+        repeated = config.get("_repeated_pairs", {}).get(category)
+        if config.get("_previous_pairs") and repeated is not None:
+            notes.append(f"{repeated} consecutive pairs repeated from previous races")
         if minimum and base < minimum:
             notes.append(f"raised from {base} to ruleset minimum {minimum}")
         if interval > max(base, minimum):
@@ -703,6 +815,9 @@ def main() -> None:
     args = parser.parse_args()
 
     config = json.loads(args.config.read_text(encoding="utf-8"))
+    previous = config.get("previous_start_lists", [])
+    if previous:
+        config["_previous_pairs"] = load_previous_pairs(previous, args.config.parent)
     if ruleset(config) == FISO_2027:
         # FISO 2027 keeps the 6 normal / 8 absolute per-minute limits; never allow more than 8.
         config.setdefault("max_load", 6)

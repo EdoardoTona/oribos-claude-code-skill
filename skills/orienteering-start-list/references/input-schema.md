@@ -87,7 +87,8 @@ Minimal example:
 - `master_min_age` (default 35), `master_min_interval_sprint` (default 2), `master_min_interval` (default 3): used by `fiso-2027`.
 - `categories.<name>.master`: force master detection on/off for non-standard category names.
 - `categories.<name>.min_interval`: minimum interval for one category (works with any ruleset).
-- `max_interval` (global or per category) and `master_max_interval`: wider intervals to try first; kept only if the category fits the window without exceeding `max_load`.
+- `max_interval` (global or per category) and `master_max_interval`: wider intervals to try first; kept only if the category fits the window without exceeding `max_load`. With `fiso-2027` in non-sprint races, every category defaults to `fiso_max_interval` (7).
+- `previous_start_lists`: list of proposal CSVs from earlier races of the same weekend/multi-day event (paths relative to the config file). Athletes who were consecutive there are kept apart, swapping only inside each category's shuffle scope. Requires stable `id` values across races. Disable with `avoid_repeated_pairs: false` (global or per category).
 - `random_groups` (global or per category): shuffle a ranked category within N contiguous strength groups. `random_block` takes precedence when both are set. With `fiso-2027`, ranked categories default to `elite_random_block` (5) when the name contains "Elite" and `default_random_groups` (3) otherwise.
 
 ## Output CSV
