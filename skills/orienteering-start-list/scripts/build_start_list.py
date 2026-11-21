@@ -1393,10 +1393,13 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
         attempts = [(window // 4, hard) for hard in levels] if sensitive else []
         attempts += [(None, hard) for hard in levels]
         for early_limit, hard in attempts:
-            for k, order in enumerate(orders[:repair_restarts]):
+            # Held early, success depends on the starting order more than on long searches: more, shorter attempts.
+            restarts = repair_restarts * 3 if early_limit is not None else repair_restarts
+            moves = max(1, repair_moves // 4) if early_limit is not None else repair_moves
+            for k, order in enumerate(orders[:restarts]):
                 out = repair_grid(
                     slots_by_category, choices, order, window, max_load, hard, ramp, sensitive, early_weight,
-                    seed=seed + k, moves=repair_moves, early_limit=early_limit,
+                    seed=seed + k, moves=moves, early_limit=early_limit,
                 )
                 if out is None or (over_allowed is not None and out[1].over_max > over_allowed):
                     continue

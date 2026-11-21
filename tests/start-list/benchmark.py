@@ -108,12 +108,17 @@ def proven(r: dict) -> bool:
     return r.get("outcome") == "grid" and "best" in exact and (exact["status"] == "optimal" or exact["best"] <= lower_bound(r))
 
 
+def best_known(r: dict) -> int:
+    """Shortest grid known: the exact model's, or the script's when CP-SAT found none within its time limit."""
+    return min(r.get("exact", {}).get("best", r["window"]), r["window"])
+
+
 def gap_text(r: dict) -> str:
     exact = r.get("exact", {})
     if r.get("outcome") == "grid":
-        if "best" not in exact:
+        if not exact:
             return "-"
-        gap = r["window"] - exact["best"]
+        gap = r["window"] - best_known(r)
         return f"{gap}" if proven(r) else f"{gap}-{r['window'] - lower_bound(r)}"
     return ""
 
@@ -159,15 +164,17 @@ def write_report(results: list[dict], out: Path, years: list[str], seconds: floa
             f"- Beyond what the pace requires (the larger of optimum and pace floor), same races: none in "
             f"{sum(1 for g in beyond if g <= 0)}, within 3 min in {sum(1 for g in beyond if g <= 3)}, at most {max(beyond)} min."
         )
-    unproven = [r for r in grids if "best" in r.get("exact", {}) and not proven(r)]
+    unproven = [r for r in grids if r.get("exact") and not proven(r)]
     if unproven:
-        found = sorted(r["window"] - r["exact"]["best"] for r in unproven)
-        worst = max(unproven, key=lambda r: r["window"] - r["exact"]["best"])
+        found = sorted(r["window"] - best_known(r) for r in unproven)
+        worst = max(unproven, key=lambda r: r["window"] - best_known(r))
         lines.append(
             f"- Optimum not proven within the time limit ({len(unproven)} races, mostly the largest): the exact model found "
-            f"a grid shorter than the script's by a median of {found[len(found) // 2]} min, at most {found[-1]} min "
-            f"({worst['event']} {worst['race']}: {worst['window']} vs {worst['exact']['best']}); the true gap is at "
-            "least that, at most the upper end of the Gap column."
+            f"a grid shorter than the script's in {sum(1 for g in found if g > 0)}, by a median of {found[len(found) // 2]} "
+            f"min, at most {found[-1]} min ({worst['event']} {worst['race']}: {worst['window']} vs {best_known(worst)}); "
+            "the true gap is at least that, at most the upper end of the Gap column. Beyond what the pace requires "
+            f"(the larger of the shortest grid known and the pace floor): at most "
+            f"{max(r['window'] - max(best_known(r), r.get('pace_floor', 0)) for r in unproven)} min."
         )
     lines += ["", "## Races", "",
               "| Date | Event | Race | Type | Grid athletes | Starts | Script | Exact optimum | Gap | Pace floor | Real grid | Valid | Time (s) |",
@@ -177,7 +184,8 @@ def write_report(results: list[dict], out: Path, years: list[str], seconds: floa
         if r.get("outcome") == "grid":
             script = f"{r['window']}"
             best = (f"{exact['best']}" if proven(r) else
-                    f"{lower_bound(r)}-{exact['best']}" if "best" in exact else exact.get("status", "-"))
+                    f"{lower_bound(r)}-{exact['best']}" if "best" in exact else
+                    f"{lower_bound(r)}-{r['window']} (CP-SAT: no grid within the time limit)" if exact else "-")
         elif r.get("outcome", "").startswith("stop: collisions"):
             script = f"stop at {r.get('stop_length')} ({r.get('collisions_if_approved')} collisions if approved)"
             best = ("no collision-free grid" if exact.get("status") == "infeasible" else
