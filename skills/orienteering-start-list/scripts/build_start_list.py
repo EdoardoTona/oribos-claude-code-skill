@@ -89,6 +89,8 @@ def absolute_time(first_start: str, minute: int | None) -> str:
 
 FISO_2027 = "fiso-2027"
 MASTER_PATTERN = re.compile(r"^\s*[MWDHF]\s*-?\s*(\d{2})\b", re.IGNORECASE)
+AGE_PATTERN = re.compile(r"^\s*[MWDHF]\s*-?\s*(\d{1,2})(?!\d)", re.IGNORECASE)
+ELITE_PATTERN = re.compile(r"elite|^\s*[MWDHF]\s*-?\s*21\s*-?\s*E\b|^\s*[MWDHF]\s*E\s*$", re.IGNORECASE)
 
 
 def ruleset(config: dict) -> str:
@@ -108,6 +110,45 @@ def is_master(config: dict, category: str) -> bool:
     return bool(match) and int(match.group(1)) >= int(config.get("master_min_age", 35))
 
 
+def is_elite(config: dict, category: str) -> bool:
+    """Elite = "M Elite", "WE", "M21E"... Override with categories.<name>.elite."""
+    cfg = category_config(config, category)
+    if "elite" in cfg:
+        return bool(cfg["elite"])
+    return bool(ELITE_PATTERN.search(category))
+
+
+def is_junior(config: dict, category: str) -> bool:
+    """Junior = age classes up to 20 included (M10 ... W 19/20). Override with categories.<name>.junior."""
+    cfg = category_config(config, category)
+    if "junior" in cfg:
+        return bool(cfg["junior"])
+    match = AGE_PATTERN.match(category)
+    return bool(match) and int(match.group(1)) <= int(config.get("junior_max_age", 20)) and not is_elite(config, category)
+
+
+def fixed_interval_for(config: dict, category: str) -> int | None:
+    """Intervals that are never widened (FISO 2027 ruleset):
+    - Elite and Junior in sprint: 1 minute (IOF Rule 12.17).
+    - With interval_policy "iof", Elite and Junior in every race follow the IOF rules:
+      middle 2 minutes (Rule 12.17/12.19), long 3 for Elite (WOC, Rule 12.18) and 2 for Junior (JWOC, Rule 12.19).
+    An explicit categories.<name>.interval or max_interval wins."""
+    cfg = category_config(config, category)
+    if ruleset(config) != FISO_2027 or "interval" in cfg or "max_interval" in cfg:
+        return None
+    elite, junior = is_elite(config, category), is_junior(config, category)
+    if not (elite or junior):
+        return None
+    kind = race_type(config)
+    if kind == "sprint":
+        return 1
+    if str(config.get("interval_policy", "wide")).lower() == "iof":
+        if kind == "long":
+            return int(config.get("iof_long_elite", 3)) if elite else int(config.get("iof_long_junior", 2))
+        return 2
+    return None
+
+
 def min_interval_for(config: dict, category: str) -> int:
     """Minimum interval imposed by the ruleset (0 = no minimum)."""
     cfg = category_config(config, category)
@@ -124,6 +165,9 @@ def base_interval_for(config: dict, category: str) -> int:
     cfg = category_config(config, category)
     if "interval" in cfg:
         return int(cfg["interval"])
+    fixed = fixed_interval_for(config, category)
+    if fixed is not None:
+        return fixed
     if "interval_minutes" in config:
         return int(config["interval_minutes"])
     if race_type(config) == "sprint":
@@ -141,14 +185,19 @@ def max_interval_for(config: dict, category: str) -> int:
     """Largest interval worth trying when the window allows it (FISO 2027 encourages wider gaps)."""
     cfg = category_config(config, category)
     base = interval_for(config, category)
+    if fixed_interval_for(config, category) is not None:
+        return base
     if "max_interval" in cfg:
         return max(base, int(cfg["max_interval"]))
     if is_master(config, category) and "master_max_interval" in config:
         return max(base, int(config["master_max_interval"]))
     if "max_interval" in config:
         return max(base, int(config["max_interval"]))
-    if ruleset(config) == FISO_2027 and race_type(config) != "sprint":
-        # FISO 2027: in non-sprint races every category may get a wider (constant) interval, up to 7 minutes.
+    if ruleset(config) == FISO_2027:
+        # FISO 2027: every category (except the fixed Elite/Junior ones) may get a wider constant interval
+        # when the window allows it: up to 7 minutes in middle/long, up to 4 in sprint.
+        if race_type(config) == "sprint":
+            return max(base, int(config.get("sprint_max_interval", 4)))
         return max(base, int(config.get("fiso_max_interval", 7)))
     return base
 
@@ -940,6 +989,8 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
             if len(values) < 2 or all(math.gcd(a, b) > 1 for a in values for b in values):
                 continue
             for c in members:
+                if fixed_interval_for(config, c) is not None or "interval" in category_config(config, c):
+                    continue  # fixed by the rules: the others adapt around it
                 if mode == "even":
                     target = base_intervals[c] + (base_intervals[c] % 2)
                 else:
@@ -1264,6 +1315,8 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
             notes.append(f"{repeated} consecutive pairs repeated from previous races")
         if minimum and base < minimum:
             notes.append(f"raised from {base} to ruleset minimum {minimum}")
+        if fixed_interval_for(config, category) is not None:
+            notes.append("fixed (Elite/Junior, IOF rules)")
         aligned = config.get("_aligned", {}).get(category)
         if aligned:
             notes.append(
