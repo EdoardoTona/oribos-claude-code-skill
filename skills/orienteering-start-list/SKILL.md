@@ -9,12 +9,12 @@ description: Create fair orienteering start list proposals as CSV files from ath
 
 1. Gather the race facts before calculating:
    - Race type: sprint, middle, long, or custom interval.
-   - Country/ruleset: for Italian (FISO) events from 2027, read `references/fiso-2027.md` and set `"ruleset": "fiso-2027"` — masters 35+ need at least 2 minutes (sprint) / 3 minutes (other races), non-sprint categories are widened up to 7 minutes when the window allows, and ranked categories are randomized by strength groups.
+   - WRE: if the race is a WRE, set `"wre": true` (the Elite categories keep the IOF intervals; see `references/rules-iof.md`). For IOF championships or events abroad, ask which rules apply.
    - Previous races of the same weekend/multi-day event: their proposal CSVs, to avoid repeating consecutive pairs.
    - Pace: ask whether the organizer prefers to finish early (`"pace": "compact"`, default, about 5.5 starters per minute per start) or to spread the starts more (`"pace": "spread"`, about 4 per minute and at least 30% longer, with wider intervals). A maximum window (`window_minutes`) always wins over the pace.
    - First start time and desired total window. Scale the window with entries: 80-90 minutes is reasonable for a few hundred middle-distance runners; 800 runners may need 150-220 minutes or multiple start lanes.
-   - Start interval: sprint usually 1 minute, middle usually 2 minutes, long 2 or 3 minutes (often the same as middle; confirm with the organizer). Oribos also supports 30-second intervals.
-   - Maximum start load per minute, per physical start: prefer fewer; 6 average/normal maximum is manageable, short peaks of 7-8 (occasionally 9 in large events) may be acceptable, higher usually requires more physical start lanes/corridors. Ask which start each category uses when there is more than one.
+   - Start interval: the script chooses it (see Default Rules below): normal 1 minute in sprint, 2 in middle; at least 3 for masters outside sprint and for every category in long races; wider when the window allows it. Ask whether the organizer wants some categories fixed instead. Oribos also supports 30-second intervals.
+   - Maximum start load per minute, per physical start: 4-6 normally, 6 as the usual maximum, short peaks up to 8, never more than 8; more requires more physical start lanes/corridors. Ask which start each category uses when there is more than one.
    - Course for each category and the first control for each course. Importing courses into event software is not required, but first controls are essential for avoiding conflicts.
    - Free-start categories. Always ask; common examples are Beginners, M/W10, M/W12, Direct.
    - Vacant policy. Ask case by case for free-start categories. For grid categories, default to 2 vacants unless told otherwise (real events use 1-3, with 2 the most common); small categories (fewer than 10 athletes) get 1.
@@ -34,7 +34,7 @@ description: Create fair orienteering start list proposals as CSV files from ath
    - Preserve enough columns to integrate later: athlete id, bib, name, club, category, course, first control, relative time, absolute time, category position, vacant flag, request notes.
 
 4. Validate hard constraints before presenting:
-   - No two runners with the same first control start at the same minute unless the organizer explicitly accepts it.
+   - No two runners from the same start with the same first control start at the same minute. Collisions are never accepted without the organizer's explicit approval (`allow_first_control_collision`); when the script stops on them, explain the options and ask. Always tell the organizer how many collisions a proposal has.
    - Interval is constant within each category/course group unless custom rules say otherwise.
    - Vacants appear only where requested/allowed, normally at the category end (Oribos itself only places vacants at the end of a category; use other placements only on explicit request).
    - Free-start categories are clearly marked and normally have no assigned time.
@@ -43,23 +43,20 @@ description: Create fair orienteering start list proposals as CSV files from ath
    - In multi-day events, no category should have the same start order in two stages unless the organizer explicitly asks for identical grids or a fixed ranking order makes it unavoidable; report any repeated full order or repeated tail block.
    - Report start load per minute, peak load, window, request satisfaction, club-consecutive issues, and first-control collisions.
 
-## Italy (FISO) From 2027
+## Default Rules
 
-Italian events from 2027 follow extra FISO guidelines; read `references/fiso-2027.md`. In short:
+Read `references/baseline-rules.md` before building a proposal. In short:
 
-- Same limits as before: contained window, 4-6 starters per minute, never more than 8 — per physical start (separate starts each have that throughput; read each category's start from the event data). 5 or 6 per minute is fine for every race type; with 3 or more separate starts aim a bit lower (4-5 per start), but 6 with short peaks up to 8 is always acceptable when the window must stay within a maximum length. The organizer may raise the limit (up to 8) to shorten a long grid. Ramp up each start gradually (1, 2, 4, then normal pace) in every race.
-- Very large master categories (50+) may get 2 minutes instead of 3 when 3 minutes alone would make the grid far longer; the script proposes it and warns.
+- Load: contained window, 4-6 starters per minute per physical start, never more than 8 (separate starts each have that throughput; read each category's start from the event data). Pace `compact` (default, about 5.5 per minute per start) or `spread` (about 4, at least 30% longer, wider intervals); one lower with 3 or more starts. The organizer may raise `max_load` up to 8 to shorten a long grid. Each start ramps up gradually (1, 2, 4, then normal pace).
+- Intervals: masters (35+) at least 2 minutes in sprint and 3 in other races; in long races every category at least 3. These minimums are a strong recommendation, given up (back to the normal interval, that category only) only with too many entries: categories of 50+ athletes, or up to 3 categories that would make the grid more than 10 minutes longer. The report warns every time.
+- Every category gets the widest constant interval the window allows (up to 7 minutes, 4 in sprint), unless the organizer says otherwise; the total window does not grow for it. Elite and Junior (up to 20 included) stay at 1 minute in sprint; in WRE races (`"wre": true`) the Elite categories keep the IOF intervals (sprint 1, middle 2, long 3).
 - Categories sharing a start and first control need compatible intervals (2 and 4 yes, 2 and 3 no); different starts to the same first control are different legs and never collide.
-- Too few distinct first controls must not produce an unrealistic grid: the script keeps an acceptable length, accepts the fewest first-control collisions and warns; tell the organizer and let them decide (more first controls, more starts, longer window, or accept).
-- Master categories (35+): minimum interval 2 minutes in sprint, 3 minutes in other races.
-- Every category gets the widest interval the window allows (up to 7 minutes in middle/long, 4 in sprint), constant within the category; the total window does not grow. The script picks the intervals itself, sharing the room fairly between categories. Elite and Junior (up to 20) stay at 1 minute in sprint. With `"interval_policy": "iof"` Elite and Junior follow the IOF intervals in every race (middle 2, long 3 Elite / 2 Junior). Ask the organizer which they prefer.
-- Grid criteria from FISO RTF 6.10.2: constant interval inside each category, categories sharing a course may alternate, categories starting together need different first controls, vacants only at the head or tail; if not all can be met the Technical Delegate decides. Details and IOF rules in `references/rules-iof-fiso.md`.
-- No same-club athletes one after the other, except in very small categories; in seeded categories first within the same strength group/block, otherwise moving an athlete to the adjacent group/block.
+- First-control collisions need the organizer's approval. Too few distinct first controls: the script stops, reports the busiest first control and the fewest collisions found; the organizer decides (more first controls, more starts, longer window, or approve the collisions).
+- Ranked categories (Coppa Italia, lista base, WRE): randomize within about 3 strength groups; Elite categories within blocks of 5 or 10 so the strongest stay at the end.
+- No same-club athletes one after the other, except in very small categories; random categories are repaired with random swaps (no club favoured at the start or end), seeded ones within the strength group/block, otherwise moving an athlete to the adjacent group/block.
 - Vacants: 2 per grid category, 1 in small categories (fewer than 10 athletes).
-- Ranked categories (Coppa Italia, lista base): randomize within about 3 strength groups; elite categories within blocks of 5 or 10 so the strongest stay at the end.
+- Grid criteria from FISO RTF 6.10.2: constant interval inside each category, categories sharing a course may alternate, categories starting together need different first controls, vacants only at the head or tail; if not all can be met the Technical Delegate decides. IOF rules and the comparison with the defaults are in `references/rules-iof.md`.
 - Every category may have its own course: more distinct first controls to check, nothing else changes for the start list.
-
-These rules are Italy-specific; do not apply them to other countries or IOF/WRE events unless asked.
 
 ## Seeding Rules
 
@@ -77,7 +74,7 @@ These rules are Italy-specific; do not apply them to other countries or IOF/WRE 
 Use this priority unless the organizer changes it:
 
 1. Safety/operation: manageable start load, no impossible physical start situation.
-2. First-control conflicts: avoid same first control at the same minute.
+2. First-control conflicts: no same start and first control at the same minute without the organizer's approval.
 3. Fixed race rules: interval, free-start categories, seeded category requirements.
 4. Strong timing requests: childcare, transport, organiser-approved exact needs.
 5. Category window and total race window.
@@ -109,4 +106,4 @@ Read `references/input-schema.md` before using the script or adapting it to a sp
 - When using random seeding blocks, set and report a seed so the proposal is reproducible.
 - When using randomness for unseeded categories, shuffle competitors with a seed before applying club-separation heuristics, and report the seed. Sorting by bib/name/club alone is not random.
 - Keep generated CSV/report filenames stable and stage/race-specific when there are multiple races.
-- The bundled script works in whole minutes. For 30-second intervals, treat one slot as 30 seconds (halve the time unit) and convert times when writing the final CSV.
+- The bundled script works in whole minutes. For 30-second intervals, treat one slot as 30 seconds (halve the time unit) and convert times when writing the final CSV; every minute-based option must then be expressed in slots too: intervals, their minimums/maximums and windows doubled, loads per minute (`max_load`, `peak_load`, `ramp_up`) halved.

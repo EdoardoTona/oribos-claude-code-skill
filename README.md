@@ -24,14 +24,29 @@ When you're working with `.og4` or `.og3` files, Claude automatically loads the 
 
 That's it. Claude will now automatically load the OG4/OG3 reference when you work with Oribos files.
 
-## Skill
+## Skills
 
-The plugin provides one skill: `read-file-og4`, invoked automatically by Claude when relevant (not a slash command — no manual invocation needed).
+The plugin provides two skills, invoked automatically by Claude when relevant (not slash commands — no manual invocation needed).
 
-### Supporting files
+### `read-file-og4`
+
+Reads and edits OG4/OG3 files.
+
+#### Supporting files
 
 | File             | Contents                                                                        |
 | ---------------- | ------------------------------------------------------------------------------- |
 | `og4-base.md`    | Archive structure, core XML files (Progetto, Gara, Categorie, Percorsi, Atleti) |
 | `og4-special.md` | Relay (Staffetta), Score-O, MultiDays, One Man Relay                            |
 | `og4-fields.md`  | Full abbreviated field code table + G1–G16 start grid parameters                |
+
+### `orienteering-start-list`
+
+Builds start list proposals as reviewable CSV files plus a report (it never writes event files): start load per physical start, intervals (masters and long races at least 3 minutes, wider intervals when the window allows it, IOF intervals for Elite in WRE races), first-control collisions (only with the organizer's approval), seeding by strength groups, same-club separation, vacants and varied neighbours across multi-day races.
+
+| File                           | Contents                                                     |
+| ------------------------------ | ------------------------------------------------------------ |
+| `references/baseline-rules.md` | Default rules, how the script applies them, past-race tests  |
+| `references/rules-iof.md`      | IOF start rules compared with the defaults (WRE)             |
+| `references/input-schema.md`   | Athletes CSV, config JSON options, output CSV                |
+| `scripts/build_start_list.py`  | Proposal generator (CSV + report)                            |

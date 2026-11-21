@@ -47,7 +47,6 @@ Minimal example:
   "categories": {
     "M ELITE": {
       "course": "Course 1",
-      "interval": 2,
       "rank_mode": "position",
       "invert_ranking": true,
       "random_block": 5,
@@ -70,39 +69,37 @@ Minimal example:
 
 ## Defaults
 
-- `race_type=sprint` gives interval 1.
-- `race_type=middle` gives interval 2.
-- `race_type=long` gives interval 3 by default; real long events often use 2 (same as middle) — confirm with the organizer.
-- `default_vacants=2` for grid categories.
+- `race_type`: `sprint`, `middle` (default) or `long`. Normal interval: sprint 1, middle 2, long 2 (`interval_minutes` overrides it); recommended minimums on top of it (see below), so long races use 3 for every category where possible.
+- `default_vacants=2` for grid categories, 1 in small categories.
 - `vacant_position=end`.
-- `max_load=6`; `peak_load=8` (or `max_load` when `max_load` > 8).
-- `allow_first_control_collision=false` — when `true`, same-minute first-control collisions become a heavy penalty instead of a hard failure (only set on explicit organizer approval).
+- `max_load=6` (may be raised up to 8); `peak_load=8`. Nothing above 8 per minute per start is ever allowed.
+- `allow_first_control_collision=false`: first-control collisions are never accepted; when no collision-free grid of acceptable length exists the script stops and explains the options. Set it to `true` only after the organizer approved the collisions: a collision-free grid is still preferred, the fewest collisions found are used only as a last resort, and the report warns and lists each of them.
 - Missing ranks are treated as zero points/unranked.
-- `randomize_unseeded=true` means categories without ranking/random-block policy are genuinely shuffled with `random_seed` before any club-separation heuristic. Use different `stage` values or different seeds for multi-day races.
+- `randomize_unseeded=true` means categories without ranking/random-block policy are genuinely shuffled with `random_seed`; same-club neighbours are then removed with random swaps (no club is favoured for the first or last positions). Use different `stage` values or different seeds for multi-day races.
 - In multi-day work, compare common-athlete orders across stages and reject repeated full orders or repeated final blocks unless the organizer explicitly requested identical grids.
-- The script works in whole minutes. For 30-second start intervals, treat one slot as 30 seconds and convert times when exporting.
+- The script works in whole minutes. For 30-second start intervals, treat one slot as 30 seconds and convert times when exporting; every option in minutes must then be given in slots too: intervals, minimums, `max_interval` and windows doubled, loads per minute (`max_load`, `peak_load`, `ramp_up`) halved.
 
-## Ruleset Options
+## Rule Options
 
-- `ruleset`: empty (generic) or `fiso-2027` for Italian events from 2027 (see `fiso-2027.md`).
-- `master_min_age` (default 35), `master_min_interval_sprint` (default 2), `master_min_interval` (default 3): used by `fiso-2027`.
-- `categories.<name>.master`: force master detection on/off for non-standard category names.
-- `categories.<name>.min_interval`: minimum interval for one category (works with any ruleset).
-- `pace`: `compact` (default: finish early, `max_load` − 0.5 per start on average) or `spread` (spread the starts: `max_load` − 2 per start and at least `spread_factor` = 1.3 times the compact window, so small races spread too; the extra room goes into wider intervals). With 3 or more starts the target is one lower. `target_load` overrides both.
-- `window_minutes`: maximum total window. Omit it (or use `"auto"`) to compute a contained window from the longest category at minimum interval, the busiest first control and `target_load` starters per minute on average at the busiest start (default `max_load` − 0.5; `max_load` − 1.5 when there are `many_starts` = 3 or more starts). In automatic mode no minute may exceed `max_load` on any start (`auto_over_max_minutes`, default 0): the window grows a little instead.
-- `max_load` may be raised up to 8 under `fiso-2027` to shorten the grid.
-- `interval_policy` (`fiso-2027`): `wide` (default; every category may be widened, except Elite and Junior in sprint, fixed at 1 minute) or `iof` (Elite and Junior fixed at the IOF intervals in every race: sprint 1, middle 2, long `iof_long_elite` = 3 / `iof_long_junior` = 2). `sprint_max_interval` (default 4) caps widening in sprint. Elite/Junior detection: `categories.<name>.elite` / `junior`, `junior_max_age` (default 20).
-- `compact_max_categories` (default 3) and `compact_min_saving` (default 10 minutes): when only a few master categories make the automatic grid longer, they use the normal interval instead of the master minimum (reported), but only if the grid gets more than this many minutes shorter; for a smaller saving the larger interval wins. The window search refines the length with a binary search.
-- `master_large_category` (default 50): under `fiso-2027`, larger master categories whose 3-minute span would exceed the load-based window get `min_interval` 2 with a warning.
+All rules in `baseline-rules.md` apply by default; these options change them.
+
+- `wre`: `true` for WRE races: Elite categories at the IOF intervals in every race (sprint 1, middle 2, long `wre_long_interval` = 3), never widened.
+- Elite detection (one rule for intervals, WRE and seeding blocks): the word "Elite" in the name, or `ME`/`WE`/`M21E`-style short names; override with `categories.<name>.elite`. Junior: age classes up to `junior_max_age` (20) included, e.g. `M10`, `M 13/14`, `W 19/20`; override with `categories.<name>.junior`. Elite and Junior are fixed at 1 minute in sprint.
+- Master detection: `M35`, `W 40`, `D45`, `H-50`... with age ≥ `master_min_age` (35); override with `categories.<name>.master`.
+- Recommended minimums: `master_min_interval_sprint` (2), `master_min_interval` (3, other races), `long_min_interval` (3, every category in long races). `categories.<name>.min_interval` replaces the minimum for one category.
+- `categories.<name>.interval`: exact interval for one category: no minimum, no widening, never changed by the script.
+- `pace`: `compact` (default: finish early, `max_load` − 0.5 per start on average) or `spread` (spread the starts: `max_load` − 2 per start and at least `spread_factor` = 1.3 times the compact window, so small races spread too; the extra room goes into wider intervals). With `many_starts` (3) or more starts the target is one lower. `target_load` overrides both.
+- `window_minutes`: maximum total window. Omit it (or use `"auto"`) to compute a contained window from the longest category at its minimum interval, the busiest first control and `target_load` starters per minute on average at the busiest start. In automatic mode no minute may exceed `max_load` on any start (`auto_over_max_minutes`, default 0): the window grows a little instead.
+- `widen_intervals` (global or per category, default `true`): give every category the widest constant interval the window allows. Upper limits: `categories.<name>.max_interval`, `master_max_interval` (masters), `max_interval` (global), otherwise 7 minutes (`sprint_max_interval` = 4 in sprint). Intervals are widened one minute at a time, smallest first, while every category still fits the window without new minutes over `max_load` or new first-control collisions.
+- Too many entries: `large_category` (50), `compact_max_categories` (3) and `compact_min_saving` (10 minutes). A category of 50+ athletes whose span at the recommended minimum would make the grid more than 10 minutes longer than the rest needs (or not fit a fixed window) gets the normal interval; when only up to 3 categories overflow the automatic window and they are held at a recommended minimum, they get the normal interval if the grid becomes more than 10 minutes shorter. Both are reported with a WARNING.
 - First-control collisions are counted per start: the same first control used from different starts is not a collision.
-- `max_window_stretch` (default 1.25, at least `min_window_margin` = 20 minutes) and `first_control_realistic` (default 1.5, at least `first_control_margin` = 30 minutes): when first controls are too few for a collision-free grid of acceptable length, the fewest collisions are accepted and the report warns. The minute margins keep small races from falling back too early.
+- `max_window_stretch` (default 1.25, at least `min_window_margin` = 20 minutes) and `first_control_realistic` (default 1.5, at least `first_control_margin` = 30 minutes): how much longer than entries and load need the automatic window may grow to avoid first-control collisions before the script stops (or, with `allow_first_control_collision`, accepts the fewest collisions).
 - `ramp_up` (default `[1, 2, 4]`): maximum starters per start in the first minutes of the window, so the start can settle in; `[]` disables it.
 - `placement_attempts` (default 30): category orders tried when placing; the first is largest-category-first, then busiest-first-control-first, longest-span-first and seeded variations.
-- `max_interval` (global or per category) and `master_max_interval`: upper limit for widening. Intervals are widened one minute at a time, smallest first, while every category still fits the window without new minutes over `max_load` or new first-control collisions. With `fiso-2027` in non-sprint races, every category defaults to `fiso_max_interval` (7).
 - `separate_clubs` (global or per category): defaults to `true` for categories with a random component (full shuffle, `random_groups`, `random_block`); swaps stay inside the shuffle scope. On a fixed-order ranked category, `true` uses the legacy greedy separation, which can break the ranking order. `club_separation_min_entries` (default 4): smaller categories are not separated. `club_move_to_neighbour_group` (default true): when swaps inside a group/block cannot separate same-club athletes, allow moving them to the adjacent group/block.
 - `small_category_size` (default 10) and `small_category_vacants` (default 1): categories with fewer athletes get this many vacants instead of `default_vacants` (unless the category sets `vacants`).
 - `previous_start_lists`: list of proposal CSVs from earlier races of the same weekend/multi-day event (paths relative to the config file). Athletes who were consecutive there are kept apart, swapping only inside each category's shuffle scope. Requires stable `id` values across races. Disable with `avoid_repeated_pairs: false` (global or per category).
-- `random_groups` (global or per category): shuffle a ranked category within N contiguous strength groups. `random_block` takes precedence when both are set. With `fiso-2027`, ranked categories default to `elite_random_block` (5) when the name contains "Elite" and `default_random_groups` (3) otherwise.
+- `random_groups` (global or per category): shuffle a ranked category within N contiguous strength groups. `random_block` takes precedence when both are set. Ranked categories default to `elite_random_block` (5) for Elite categories and `default_random_groups` (3) otherwise.
 
 ## Output CSV
 

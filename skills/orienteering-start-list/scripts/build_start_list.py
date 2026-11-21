@@ -33,6 +33,10 @@ class Entry:
     start_lane: str = "1"
 
 
+class StartListError(RuntimeError):
+    """A problem the organizer has to decide on; printed without a traceback."""
+
+
 @dataclass
 class Slot:
     entry: Entry
@@ -87,18 +91,19 @@ def absolute_time(first_start: str, minute: int | None) -> str:
     return f"{total // 60:02}:{total % 60:02}:{ss:02}"
 
 
-FISO_2027 = "fiso-2027"
 MASTER_PATTERN = re.compile(r"^\s*[MWDHF]\s*-?\s*(\d{2})\b", re.IGNORECASE)
 AGE_PATTERN = re.compile(r"^\s*[MWDHF]\s*-?\s*(\d{1,2})(?!\d)", re.IGNORECASE)
-ELITE_PATTERN = re.compile(r"elite|^\s*[MWDHF]\s*-?\s*21\s*-?\s*E\b|^\s*[MWDHF]\s*E\s*$", re.IGNORECASE)
-
-
-def ruleset(config: dict) -> str:
-    return str(config.get("ruleset", "")).strip().lower()
+# Elite: the word "Elite" anywhere ("M Elite", "W ELITE", "Men Elite"), or the short forms "ME", "W E", "M-E",
+# "M21E", "W 21 E". "M Esordienti" or "ME2" are not elite.
+ELITE_PATTERN = re.compile(r"[eé]lite|^\s*[MWDHF]\s*-?\s*(?:21\s*-?\s*)?E\b", re.IGNORECASE)
 
 
 def race_type(config: dict) -> str:
     return str(config.get("race_type", "middle")).lower()
+
+
+def is_wre(config: dict) -> bool:
+    return bool(config.get("wre", False))
 
 
 def is_master(config: dict, category: str) -> bool:
@@ -111,7 +116,7 @@ def is_master(config: dict, category: str) -> bool:
 
 
 def is_elite(config: dict, category: str) -> bool:
-    """Elite = "M Elite", "WE", "M21E"... Override with categories.<name>.elite."""
+    """The single Elite rule used everywhere (intervals, WRE, seeding blocks). Override with categories.<name>.elite."""
     cfg = category_config(config, category)
     if "elite" in cfg:
         return bool(cfg["elite"])
@@ -119,7 +124,7 @@ def is_elite(config: dict, category: str) -> bool:
 
 
 def is_junior(config: dict, category: str) -> bool:
-    """Junior = age classes up to 20 included (M10 ... W 19/20). Override with categories.<name>.junior."""
+    """Junior = age classes up to 20 included (M10, M 13/14 ... W 19/20). Override with categories.<name>.junior."""
     cfg = category_config(config, category)
     if "junior" in cfg:
         return bool(cfg["junior"])
@@ -128,64 +133,79 @@ def is_junior(config: dict, category: str) -> bool:
 
 
 def fixed_interval_for(config: dict, category: str) -> int | None:
-    """Intervals that are never widened (FISO 2027 ruleset):
-    - Elite and Junior in sprint: 1 minute (IOF Rule 12.17).
-    - With interval_policy "iof", Elite and Junior in every race follow the IOF rules:
-      middle 2 minutes (Rule 12.17/12.19), long 3 for Elite (WOC, Rule 12.18) and 2 for Junior (JWOC, Rule 12.19).
+    """Intervals that are never widened nor raised:
+    - WRE races (`wre: true`): the Elite categories follow the IOF rules: sprint 1, middle 2, long 3 (`wre_long_interval`).
+    - Sprint: Elite and Junior categories stay at 1 minute.
     An explicit categories.<name>.interval or max_interval wins."""
     cfg = category_config(config, category)
-    if ruleset(config) != FISO_2027 or "interval" in cfg or "max_interval" in cfg:
+    if "interval" in cfg or "max_interval" in cfg:
         return None
-    elite, junior = is_elite(config, category), is_junior(config, category)
-    if not (elite or junior):
-        return None
+    elite = is_elite(config, category)
     kind = race_type(config)
-    if kind == "sprint":
-        return 1
-    if str(config.get("interval_policy", "wide")).lower() == "iof":
+    if elite and is_wre(config):
+        if kind == "sprint":
+            return 1
         if kind == "long":
-            return int(config.get("iof_long_elite", 3)) if elite else int(config.get("iof_long_junior", 2))
+            return int(config.get("wre_long_interval", 3))
         return 2
+    if kind == "sprint" and (elite or is_junior(config, category)):
+        return 1
     return None
 
 
+def normal_interval(config: dict) -> int:
+    """The usual interval of the race type, also the floor when a category gives up a recommended minimum:
+    sprint 1, middle and long 2 (`interval_minutes` overrides it)."""
+    if "interval_minutes" in config:
+        return int(config["interval_minutes"])
+    return 1 if race_type(config) == "sprint" else 2
+
+
+def preferred_min_interval(config: dict, category: str) -> int:
+    """Strongly recommended minimum (0 = none): masters 35+ at least 2 minutes in sprint and 3 in other races;
+    every category at least 3 minutes in long races. Given up (back to the normal interval) only when a category
+    has too many entries, see relax_large_categories and the compaction step in assign_times."""
+    kind = race_type(config)
+    values = [0]
+    if is_master(config, category):
+        key, default = ("master_min_interval_sprint", 2) if kind == "sprint" else ("master_min_interval", 3)
+        values.append(int(config.get(key, default)))
+    if kind == "long":
+        values.append(int(config.get("long_min_interval", 3)))
+    return max(values)
+
+
 def min_interval_for(config: dict, category: str) -> int:
-    """Minimum interval imposed by the ruleset (0 = no minimum)."""
+    """Minimum interval of a category: categories.<name>.min_interval, else the recommended minimum."""
     cfg = category_config(config, category)
     if "min_interval" in cfg:
         return int(cfg["min_interval"])
-    if ruleset(config) == FISO_2027 and is_master(config, category):
-        if race_type(config) == "sprint":
-            return int(config.get("master_min_interval_sprint", 2))
-        return int(config.get("master_min_interval", 3))
-    return 0
+    return preferred_min_interval(config, category)
 
 
-def base_interval_for(config: dict, category: str) -> int:
+def interval_for(config: dict, category: str) -> int:
+    """Starting (minimum) interval of a category before widening. categories.<name>.interval is exact and fixed."""
     cfg = category_config(config, category)
     if "interval" in cfg:
         return int(cfg["interval"])
     fixed = fixed_interval_for(config, category)
     if fixed is not None:
         return fixed
-    if "interval_minutes" in config:
-        return int(config["interval_minutes"])
-    if race_type(config) == "sprint":
-        return 1
-    if race_type(config) == "long":
-        return 3
-    return 2
+    return max(normal_interval(config), min_interval_for(config, category))
 
 
-def interval_for(config: dict, category: str) -> int:
-    return max(base_interval_for(config, category), min_interval_for(config, category))
+def is_fixed(config: dict, category: str) -> bool:
+    return "interval" in category_config(config, category) or fixed_interval_for(config, category) is not None
 
 
 def max_interval_for(config: dict, category: str) -> int:
-    """Largest interval worth trying when the window allows it (FISO 2027 encourages wider gaps)."""
+    """Largest interval worth trying when the window allows it: wider gaps inside a category are the default
+    (up to 7 minutes, 4 in sprint), unless the organizer says otherwise (`widen_intervals: false`, `max_interval`)."""
     cfg = category_config(config, category)
     base = interval_for(config, category)
-    if fixed_interval_for(config, category) is not None:
+    if is_fixed(config, category):
+        return base
+    if not bool(cfg.get("widen_intervals", config.get("widen_intervals", True))):
         return base
     if "max_interval" in cfg:
         return max(base, int(cfg["max_interval"]))
@@ -193,13 +213,9 @@ def max_interval_for(config: dict, category: str) -> int:
         return max(base, int(config["master_max_interval"]))
     if "max_interval" in config:
         return max(base, int(config["max_interval"]))
-    if ruleset(config) == FISO_2027:
-        # FISO 2027: every category (except the fixed Elite/Junior ones) may get a wider constant interval
-        # when the window allows it: up to 7 minutes in middle/long, up to 4 in sprint.
-        if race_type(config) == "sprint":
-            return max(base, int(config.get("sprint_max_interval", 4)))
-        return max(base, int(config.get("fiso_max_interval", 7)))
-    return base
+    if race_type(config) == "sprint":
+        return max(base, int(config.get("sprint_max_interval", 4)))
+    return max(base, 7)
 
 
 def category_config(config: dict, category: str) -> dict:
@@ -323,13 +339,11 @@ def seeding_policy(config: dict, category: str) -> tuple[str, int]:
         return "block", int(config["random_block"])
     if config.get("random_groups"):
         return "groups", int(config["random_groups"])
-    if ruleset(config) == FISO_2027:
-        # FISO 2027: elite classes shuffled in small blocks (5 or 10) so the strongest stay near the end;
-        # other ranked classes shuffled within ~3 strength groups (Coppa Italia, lista base...).
-        if "elite" in category.lower():
-            return "block", int(config.get("elite_random_block", 5))
-        return "groups", int(config.get("default_random_groups", 3))
-    return "none", 0
+    # Elite classes are shuffled in small blocks (5 or 10) so the strongest stay near the end; other ranked
+    # classes within about 3 strength groups (Coppa Italia, lista base...).
+    if is_elite(config, category):
+        return "block", int(config.get("elite_random_block", 5))
+    return "groups", int(config.get("default_random_groups", 3))
 
 
 def separate_clubs(order: list[Entry], preserve_input_ties: bool = False) -> list[Entry]:
@@ -355,6 +369,54 @@ def separate_clubs(order: list[Entry], preserve_input_ties: bool = False) -> lis
         last_club = chosen
         if not groups[chosen]:
             del groups[chosen]
+    return result
+
+
+def same_club_count(order: list[Entry]) -> int:
+    return sum(1 for left, right in zip(order, order[1:]) if left.club and left.club == right.club)
+
+
+def min_same_club(order: list[Entry]) -> int:
+    """Fewest same-club neighbours possible: only a club with more than half of the athletes forces some."""
+    counts = Counter(entry.club for entry in order if entry.club)
+    largest = max(counts.values(), default=0)
+    return max(0, 2 * largest - len(order) - 1)
+
+
+def spread_clubs_randomly(order: list[Entry], rng: random.Random) -> list[Entry]:
+    """Random order without same-club neighbours whenever possible. At each position a random remaining athlete
+    is drawn among those whose club differs from the previous one and leaves the rest arrangeable (a club cannot
+    keep more than half of the remaining places). No club is favoured for the first or last positions."""
+    remaining = order[:]
+    rng.shuffle(remaining)
+    counts = Counter(entry.club for entry in remaining if entry.club)
+    result: list[Entry] = []
+    last = ""
+
+    def arrangeable(club: str) -> bool:
+        rest = len(remaining) - 1
+        for other, count in counts.items():
+            left = count - (1 if other == club else 0)
+            # the picked club cannot also open the rest, so it gets one place less
+            limit = rest // 2 if other == club else (rest + 1) // 2
+            if left > limit:
+                return False
+        return True
+
+    while remaining:
+        allowed = [i for i, entry in enumerate(remaining) if not (entry.club and entry.club == last)]
+        candidates = [i for i in allowed if arrangeable(remaining[i].club)] or allowed or list(range(len(remaining)))
+        if not any(arrangeable(remaining[i].club) for i in allowed):
+            # Impossible to avoid every neighbour: spend the unavoidable ones on the largest club.
+            largest = max(counts, key=lambda club: counts[club]) if counts else ""
+            candidates = [i for i in candidates if remaining[i].club == largest] or candidates
+        entry = remaining.pop(rng.choice(candidates))
+        if entry.club:
+            counts[entry.club] -= 1
+            if not counts[entry.club]:
+                del counts[entry.club]
+        result.append(entry)
+        last = entry.club
     return result
 
 
@@ -406,8 +468,8 @@ def order_category(entries: list[Entry], config: dict, category: str) -> list[En
     if club_separation and segments is None:
         # Explicit request on a fixed-order category: legacy greedy separation (may break the ranking order).
         ordered = separate_clubs(ordered)
-    elif club_separation and randomized_unseeded:
-        ordered = separate_clubs(ordered, preserve_input_ties=True)
+    # Random categories are NOT passed through the greedy separation: it always puts the largest club first
+    # and the single-athlete clubs at the end. They are repaired by random local search below instead.
 
     forbidden = config.get("_previous_pairs", set())
     if not bool(cfg.get("avoid_repeated_pairs", config.get("avoid_repeated_pairs", True))):
@@ -428,6 +490,12 @@ def order_category(entries: list[Entry], config: dict, category: str) -> list[En
                 ordered, segments, forbidden, club_separation, seed + 104729,
                 neighbour_groups=True, stats=stats, home=original,
             )
+        if randomized_unseeded and club_separation and same_club_count(ordered) > min_same_club(ordered):
+            # The local search got stuck (one club close to half of the category): random construction that
+            # keeps the remaining athletes arrangeable at every step.
+            alternative = spread_clubs_randomly(ordered, random.Random(seed + 15485863))
+            if same_club_count(alternative) < same_club_count(ordered):
+                ordered = alternative
         config.setdefault("_moved", {})[category] = stats.get("moved", 0)
     config.setdefault("_repeated_pairs", {})[category] = sum(
         1 for left, right in zip(ordered, ordered[1:]) if frozenset((left.athlete_id, right.athlete_id)) in forbidden
@@ -629,26 +697,62 @@ def vacant_entry(category: str, course: str, first_control: str, index: int) -> 
     )
 
 
-def relax_large_masters(entries: list[Entry], config: dict) -> None:
-    """FISO 2027 master minimum (3 minutes outside sprint) on a very large master category can make
-    the whole grid far longer than entries and load need (e.g. 65 athletes x 3 min = 192 minutes).
-    For such categories propose 2 minutes instead, only for that category, and report it."""
-    if ruleset(config) != FISO_2027 or race_type(config) == "sprint":
-        return
+def vacant_count(config: dict, category: str, athletes: int) -> int:
+    """Vacants of a grid category: categories.<name>.vacants, else default_vacants (2), but only
+    small_category_vacants (1) when the category has fewer than small_category_size (10) athletes."""
+    cfg = category_config(config, category)
+    if "vacants" in cfg:
+        return int(cfg["vacants"] or 0)
+    count = int(config.get("default_vacants", 2) or 0)
+    if athletes < int(config.get("small_category_size", 10)):
+        count = min(count, int(config.get("small_category_vacants", 1)))
+    return count
+
+
+def relax_large_categories(entries: list[Entry], config: dict) -> None:
+    """The recommended minimum (masters 3 minutes, long races 3 minutes, masters 2 in sprint) is given up only
+    when a category has too many entries: with `large_category` (50) athletes or more, if its span at the
+    recommended minimum alone exceeds what entries and load need (automatic window) or the fixed window_minutes
+    (e.g. 63 athletes x 3 min = 192 minutes vs about 100), that category alone goes back to the normal interval.
+    The threshold is empirical (past Italian races on LiveResults). The report warns."""
     grid = [entry for entry in entries if entry.row_type == "assigned"]
     per_category = Counter(entry.category for entry in grid)
     per_lane = Counter(entry.start_lane for entry in grid)
+    raw_window = config.get("window_minutes", "auto")
+    automatic = str(raw_window).lower() == "auto"
     target = target_for(len(per_lane), config)
-    load_window = math.ceil(max(per_lane.values(), default=0) / max(1.0, target)) - 1
-    large = int(config.get("master_large_category", 50))
-    for category, count in per_category.items():
+    load_need = math.ceil(max(per_lane.values(), default=0) / max(1.0, target)) - 1
+    large = int(config.get("large_category", 50))
+    min_saving = int(config.get("compact_min_saving", 10))
+    normal = normal_interval(config)
+    slots = {category: count + vacant_count(config, category, count) for category, count in per_category.items()}
+
+    def candidate(category: str) -> bool:
         cfg = category_config(config, category)
-        if not is_master(config, category) or count < large or "interval" in cfg or "min_interval" in cfg:
+        return (
+            per_category[category] >= large and "min_interval" not in cfg and not is_fixed(config, category)
+            and preferred_min_interval(config, category) > normal
+        )
+
+    # What the grid needs anyway: the load, or the longest category that is not a large one.
+    others = max(
+        ((slots[c] - 1) * interval_for(config, c) for c in per_category if not candidate(c)), default=0
+    )
+    need = max(load_need, others) if automatic else int(raw_window)
+    for category in sorted(per_category):
+        if not candidate(category):
             continue
-        slots = count + int(config.get("default_vacants", 2) or 0)
-        if (slots - 1) * min_interval_for(config, category) > load_window:
-            config.setdefault("categories", {}).setdefault(category, {})["min_interval"] = 2
-            config.setdefault("_relaxed_masters", {})[category] = (count, (slots - 1) * 3, load_window)
+        preferred = preferred_min_interval(config, category)
+        span = (slots[category] - 1) * preferred
+        # Only when the category alone makes the grid clearly longer (more than compact_min_saving minutes)
+        # or does not fit a fixed window at all.
+        saving = span - max(need, (slots[category] - 1) * normal)
+        if span > need and (not automatic or saving > min_saving):
+            config.setdefault("categories", {}).setdefault(category, {})["min_interval"] = normal
+            config.setdefault("_relaxed", {})[category] = {
+                "count": per_category[category], "span": span, "need": need,
+                "preferred": preferred, "normal": normal,
+            }
 
 
 def build_category_slots(entries: list[Entry], config: dict) -> dict[str, list[Slot]]:
@@ -661,17 +765,11 @@ def build_category_slots(entries: list[Entry], config: dict) -> dict[str, list[S
     for category, category_entries in by_category.items():
         ordered = order_category(category_entries, config, category)
         cfg = category_config(config, category)
-        if "vacants" in cfg:
-            vacant_count = int(cfg["vacants"] or 0)
-        else:
-            vacant_count = int(config.get("default_vacants", 2) or 0)
-            # Small categories: one vacant is enough (but always at least one).
-            if len(ordered) < int(config.get("small_category_size", 10)):
-                vacant_count = min(vacant_count, int(config.get("small_category_vacants", 1)))
+        vacants_wanted = vacant_count(config, category, len(ordered))
         vacant_position = str(cfg.get("vacant_position", config.get("vacant_position", "end"))).lower()
         course = ordered[0].course if ordered else str(cfg.get("course", ""))
         first_control = ordered[0].first_control if ordered else first_control_for(config, {"category": category}, course)
-        vacants = [vacant_entry(category, course, first_control, idx + 1) for idx in range(vacant_count)]
+        vacants = [vacant_entry(category, course, first_control, idx + 1) for idx in range(vacants_wanted)]
         for vacant in vacants:
             vacant.start_lane = ordered[0].start_lane if ordered else str(cfg.get("start", "1"))
         if vacant_position == "start":
@@ -899,9 +997,7 @@ def auto_window(slots_by_category: dict[str, list[Slot]], config: dict, include_
     longest = max(((len(slots) - 1) * interval_for(config, category) for category, slots in slots_by_category.items()), default=0)
     # Several long categories cannot all start in the first minutes while the start ramps up.
     longest += len(config.get("ramp_up", [1, 2, 4]))
-    bound = 0
-    if include_first_controls and not config.get("allow_first_control_collision"):
-        bound = first_control_bound(slots_by_category)
+    bound = first_control_bound(slots_by_category) if include_first_controls else 0
     window = max(longest, bound, math.ceil(total / target) - 1)
     if str(config.get("pace", "compact")).lower() == "spread" and "target_load" not in config:
         # Spread: at least `spread_factor` (default +30%) longer than the compact window, so that small
@@ -947,7 +1043,11 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     window = auto_window(slots_by_category, config) if automatic else int(raw_window)
     max_load = int(config.get("max_load", 6))
     peak_load = int(config.get("peak_load", max(8, max_load)))
-    allow_collision = bool(config.get("allow_first_control_collision", False))
+    # First-control collisions are never chosen silently: a collision-free grid is always searched first, and
+    # collisions are accepted only as a last resort when the organizer approved them
+    # (allow_first_control_collision: true); otherwise the script stops and explains the options.
+    approved_collisions = bool(config.get("allow_first_control_collision", False))
+    allow_collision = False
     intervals = {category: interval_for(config, category) for category in slots_by_category}
     attempts = int(config.get("placement_attempts", 30))
     ramp = tuple(int(value) for value in config.get("ramp_up", [1, 2, 4]))
@@ -998,17 +1098,21 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
         """Make intervals of categories sharing a start + first control compatible. Two categories never
         collide when their intervals share a factor (2 and 4, 3 and 6), while 2 and 3 collide every other
         start. mode "even": raise odd intervals to the next even one (3 -> 4) so they fit between the
-        2-minute categories; mode "max": give everyone the group's largest interval."""
+        2-minute categories; mode "max": give everyone the group's largest interval; mode "max_even": give
+        everyone the group's largest interval rounded up to even (2 and 3 -> 4: four categories then fill
+        the four minutes of each cycle)."""
         result = dict(base_intervals)
         for members in groups.values():
             values = {base_intervals[c] for c in members}
             if len(values) < 2 or all(math.gcd(a, b) > 1 for a in values for b in values):
                 continue
             for c in members:
-                if fixed_interval_for(config, c) is not None or "interval" in category_config(config, c):
+                if is_fixed(config, c):
                     continue  # fixed by the rules: the others adapt around it
                 if mode == "even":
                     target = base_intervals[c] + (base_intervals[c] % 2)
+                elif mode == "max_even":
+                    target = max(values) + (max(values) % 2)
                 else:
                     target = max(values)
                 if (len(slots_by_category[c]) - 1) * target <= window:
@@ -1027,7 +1131,7 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
         found = first_fit(window)
         if found is not None and not acceptable(found):
             found = None
-        for mode in ("even", "max"):
+        for mode in ("even", "max", "max_even"):
             if found is not None:
                 break
             aligned = harmonized(window, mode)
@@ -1047,8 +1151,8 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
 
     # Acceptable length: what entries, load and the longest category need, ignoring first controls.
     # Too few distinct first controls must not make the grid unrealistically long: beyond
-    # `max_window_stretch` (default +25%) the script accepts the fewest possible first-control
-    # collisions instead, and warns.
+    # `max_window_stretch` (default +25%) a collision-free grid is not searched further; the fewest
+    # first-control collisions are used only if the organizer approved them, otherwise the script stops.
     fc_bound = first_control_bound(slots_by_category)
     initial_window = window
     if automatic:
@@ -1092,30 +1196,46 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                 low = middle
         return best, fit_window(best)  # re-run so intervals match the chosen window
 
-    found = None if (automatic and window > limit and not allow_collision) else fit_window(window)
+    found = None if (automatic and window > limit) else fit_window(window)
     if found is None and automatic and window <= limit:
         window, found = grow(window, limit)
-    if found is None and not allow_collision:
-        # First-control fallback: same acceptable window, fewest collisions.
-        allow_collision = True
-        window = limit
-        found = fit_window(window)
-        if found is None and automatic:
-            window, found = grow(window, 24 * 60)
-        if found is not None:
-            fallback = {"bound": fc_bound, "window": window}
     if found is None:
+        # No collision-free grid of acceptable length: the fewest first-control collisions at that length.
+        allow_collision = True
+        collision_window = limit
+        with_collisions = fit_window(collision_window)
+        if with_collisions is None and automatic:
+            collision_window, with_collisions = grow(collision_window, 24 * 60)
+        if with_collisions is not None and approved_collisions:
+            window, found = collision_window, with_collisions
+            fallback = {"bound": fc_bound, "window": window}
+        elif with_collisions is not None:
+            busiest = max(fc_count.items(), key=lambda item: item[1]) if fc_count else ("", 0)
+            lane, control = busiest[0].split("|", 1) if "|" in busiest[0] else ("1", busiest[0])
+            raise StartListError(
+                "No grid without first-control collisions fits "
+                + (f"an acceptable length ({limit} minutes)" if automatic else f"window_minutes={window}")
+                + f". The busiest first control ({control}, start {lane}) has {busiest[1]} starters, so a grid "
+                f"without collisions needs at least {fc_bound} minutes. Accepting the fewest collisions found, "
+                f"the grid would run {collision_window} minutes with about {with_collisions[1].collisions} "
+                "first-control collisions.\nFirst-control collisions must be approved by the organizer. Options: more distinct "
+                "first controls (ask the course setter), more separate starts, a longer window_minutes, or set "
+                '"allow_first_control_collision": true after the organizer approves the collisions.'
+            )
+    if found is None:
+        allow_collision = approved_collisions
         needed, hint_found = grow(window, 24 * 60)
         hint = f" about {needed} minutes would be needed" if hint_found else ""
-        raise RuntimeError(
+        raise StartListError(
             f"Cannot place all categories in window_minutes={window};{hint} — increase the window, "
             "the load limit or the start lanes, or reduce intervals/vacants."
         )
     order, result = found
 
     # 1b. Few categories overflowing: if the grid had to grow only because one or a few categories do not
-    #     fit the acceptable window, compact them instead (they alone may share a first control with the
-    #     fewest possible collisions); if many categories overflow, the longer grid is the right answer.
+    #     fit the acceptable window and they are held at a recommended minimum (masters, long races), those
+    #     categories alone go back to the normal interval; if many categories overflow, the longer grid is
+    #     the right answer.
     if automatic and fallback is None and window > initial_window and not allow_collision:
         grown = window
         intervals.update(base_intervals)
@@ -1130,23 +1250,22 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                 if culprits is None or len(failing) < len(culprits[0]):
                     culprits = (failing, candidate_order, packed)
         limit_categories = int(config.get("compact_max_categories", 3))
-        # A small saving is not worth a shorter interval: the larger (master) interval wins unless the grid
-        # gets more than `compact_min_saving` minutes shorter.
+        # A small saving is not worth a shorter interval: the recommended interval wins unless the grid
+        # gets more than `compact_min_saving` minutes shorter (thresholds tested on past races).
         min_saving = int(config.get("compact_min_saving", 10))
         compacted = None
         small_saving = None
         failing = list(culprits[0]) if culprits else []
         if 0 < len(failing) <= limit_categories:
-            # Lever: master categories held at the FISO master minimum (3 minutes outside sprint) above the
-            # normal interval go back to the normal interval (2), for these categories only. Kept only if
-            # the grid gets more than `compact_min_saving` minutes shorter.
+            # Lever: categories held at a recommended minimum above the normal interval (masters 3 minutes,
+            # long races 3 minutes, masters 2 in sprint) go back to the normal interval, these categories only.
             lowered = {}
-            if race_type(config) != "sprint":
-                for c in failing:
-                    if is_master(config, c) and fixed_interval_for(config, c) is None and "min_interval" not in category_config(config, c):
-                        normal = 3 if race_type(config) == "long" else 2
-                        if base_intervals[c] > normal:
-                            lowered[c] = (base_intervals[c], normal)
+            normal = normal_interval(config)
+            for c in failing:
+                if is_fixed(config, c) or "min_interval" in category_config(config, c):
+                    continue
+                if base_intervals[c] > normal and preferred_min_interval(config, c) > normal:
+                    lowered[c] = (base_intervals[c], normal)
             if lowered:
                 saved_base = dict(base_intervals)
                 for c, (_, normal) in lowered.items():
@@ -1302,7 +1421,7 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         f"Random seed: {config.get('random_seed', 1)}",
         f"Stage/race offset: {config.get('stage', config.get('race_number', 0))}",
         f"Randomize unseeded categories: {config.get('randomize_unseeded', True)}",
-        f"Ruleset: {config.get('ruleset') or 'generic'}",
+        f"Race type: {race_type(config)}" + (" (WRE: Elite categories at the IOF intervals)" if is_wre(config) else ""),
     ]
     if load:
         lines.extend(
@@ -1336,10 +1455,11 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         lines.extend(
             [
                 "",
-                f"NOTE: only a few categories did not fit the acceptable window. To keep the grid at "
-                f"{compacted['window']} minutes instead of {compacted['longer_window']}, these master categories use "
-                f"the normal interval instead of the FISO master minimum: {changed}. To keep the master minimum, set "
-                f"window_minutes to {compacted['longer_window']} or give these categories their own first control.",
+                f"WARNING: only a few categories did not fit the acceptable window. To keep the grid at "
+                f"{compacted['window']} minutes instead of {compacted['longer_window']}, these categories use "
+                f"the normal interval instead of the recommended minimum: {changed}. To keep the recommended "
+                f"minimum, set window_minutes to {compacted['longer_window']} or give these categories their own "
+                "first control.",
             ]
         )
     overflow = config.get("_overflow")
@@ -1349,13 +1469,13 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         elif overflow.get("small_saving"):
             minutes, names = overflow["small_saving"]
             reason = (
-                f"giving {', '.join(names)} the normal interval instead of the master minimum would save only "
-                f"{minutes} minutes, so the larger interval is kept"
+                f"giving {', '.join(names)} the normal interval instead of the recommended minimum would save only "
+                f"{minutes} minutes (not worth it, the larger interval is kept)"
             )
         else:
             reason = (
-                "they cannot be compacted within the rules (the overflow comes from how several categories share "
-                "first controls)"
+                "they are not held at a recommended minimum that could be given up (the overflow comes from how "
+                "several categories share first controls, or from their size)"
             )
         lines.extend(
             [
@@ -1375,17 +1495,33 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
                 "(up to 8) for a shorter grid.",
             ]
         )
+    busiest = Counter()
+    for counter in first_counts.values():
+        busiest.update(counter)
+    if busiest:
+        (lane, control), count = max(busiest.items(), key=lambda item: item[1])
+        lines.append(
+            f"Busiest first control: {control} (start {lane}) with {count} starters: a grid without "
+            f"first-control collisions needs at least {count - 1} minutes."
+        )
     fallback = config.get("_fc_fallback")
-    if fallback:
+    if collisions:
         lines.extend(
             [
                 "",
-                f"WARNING: too few distinct first controls for this window. {len(collisions)} first-control "
-                f"collisions were accepted (the fewest found) to keep the grid at {fallback['window']} minutes.",
-                f"         A grid with no collisions would need at least {fallback['bound']} minutes "
-                "(busiest first control), which is not realistic.",
+                f"WARNING: {len(collisions)} first-control collisions (listed at the end), accepted only because "
+                "allow_first_control_collision is true. The organizer must approve each of them.",
+            ]
+        )
+        if fallback:
+            lines.append(
+                f"         No grid without collisions fits {fallback['window']} minutes: it would need at least "
+                f"{fallback['bound']} minutes (busiest first control)."
+            )
+        lines.extend(
+            [
                 "         Options: more distinct first controls (ask the course setter), more separate starts, "
-                "a longer window, or accept the collisions listed below.",
+                "a longer window.",
                 "",
             ]
         )
@@ -1420,8 +1556,8 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
         cat_rows = by_category[category]
         minutes = [int(row["minute"]) for row in cat_rows if row["minute"]]
         interval = chosen.get(category, interval_for(config, category))
-        base = base_interval_for(config, category)
-        minimum = min_interval_for(config, category)
+        start_interval = interval_for(config, category)
+        preferred = 0 if is_fixed(config, category) else preferred_min_interval(config, category)
         master = is_master(config, category)
         has_seed_policy = any(
             key in cfg for key in ("rank_mode", "invert_ranking", "random_block", "random_groups")
@@ -1452,17 +1588,20 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
         repeated = config.get("_repeated_pairs", {}).get(category)
         if config.get("_previous_pairs") and repeated is not None:
             notes.append(f"{repeated} consecutive pairs repeated from previous races")
-        if minimum and base < minimum:
-            notes.append(f"raised from {base} to ruleset minimum {minimum}")
-        if fixed_interval_for(config, category) is not None:
-            notes.append("fixed (Elite/Junior, IOF rules)")
+        if "interval" in cfg:
+            notes.append(f"fixed at {interval} min (categories.{category}.interval)")
+        elif fixed_interval_for(config, category) is not None:
+            reason = "WRE Elite, IOF rules" if is_wre(config) and is_elite(config, category) else "Elite/Junior in sprint"
+            notes.append(f"fixed ({reason})")
+        elif preferred and interval < preferred:
+            notes.append(f"below the recommended minimum of {preferred} min")
         aligned = config.get("_aligned", {}).get(category)
         if aligned:
             notes.append(
                 f"interval raised from {aligned[0]} to {aligned[1]} to match the categories sharing its start and first "
                 f"control ({', '.join(aligned[2])}): 2 and 3 minutes on the same first control collide every other start"
             )
-        elif interval > max(base, minimum):
+        elif interval > start_interval:
             notes.append("widened because the window allowed it")
         lines.append(
             f"- {category}: {len(cat_rows)} slots, interval {interval} min, "
@@ -1470,29 +1609,30 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
             f"master={'yes' if master else 'no'}, seeding: {seeding}"
             + (f" ({'; '.join(notes)})" if notes else "")
         )
-        if minimum and interval < minimum:
-            warnings.append(f"WARNING: {category} interval {interval} is below the ruleset minimum {minimum}.")
-    if ruleset(config) == FISO_2027:
-        lines.extend(
-            [
-                "",
-                "FISO 2027 checks: master (35+) minimum interval "
-                f"{config.get('master_min_interval_sprint', 2)} min sprint / {config.get('master_min_interval', 3)} min other races; "
-                "load target 4-6 per minute per start, never above 8.",
-            ]
-        )
-        peak = Counter(
-            (row.get("start") or "1", int(row["minute"])) for rows_ in by_category.values() for row in rows_ if row["minute"]
-        )
-        if peak and max(peak.values()) > 8:
-            warnings.append(f"WARNING: peak load {max(peak.values())} exceeds the FISO limit of 8 per minute per start.")
-    for category, (count, span, load_window) in sorted(config.get("_relaxed_masters", {}).items()):
-        warnings.append(
-            f"WARNING: {category} has {count} athletes: at the FISO master minimum of 3 minutes it alone would take "
-            f"{span} minutes, while entries and load need about {load_window}. Proposed minimum 2 minutes for this "
-            "category only; alternatives: split it over two starts, or accept a longer grid (set categories."
-            f"{category}.min_interval to 3)."
-        )
+        relaxed = config.get("_relaxed", {}).get(category)
+        if relaxed and interval < relaxed["preferred"]:
+            warnings.append(
+                f"WARNING: {category} has {relaxed['count']} athletes: at the recommended minimum of "
+                f"{relaxed['preferred']} minutes it alone would take {relaxed['span']} minutes, while "
+                + ("the rest of the grid needs about" if str(config.get("window_minutes", "auto")).lower() == "auto"
+                   else "window_minutes is")
+                + f" {relaxed['need']}. It uses {interval} minutes, this category only; alternatives: split it over "
+                f"two starts, or accept a longer grid (set categories.{category}.min_interval to {relaxed['preferred']})."
+            )
+    lines.extend(
+        [
+            "",
+            "Checks: recommended minimum interval for masters (35+) "
+            f"{config.get('master_min_interval_sprint', 2)} min in sprint / {config.get('master_min_interval', 3)} min "
+            f"in other races, {config.get('long_min_interval', 3)} min for every category in long races; "
+            "load 4-6 per minute per start, never above 8.",
+        ]
+    )
+    peak = Counter(
+        (row.get("start") or "1", int(row["minute"])) for rows_ in by_category.values() for row in rows_ if row["minute"]
+    )
+    if peak and max(peak.values()) > 8:
+        warnings.append(f"WARNING: peak load {max(peak.values())} exceeds the limit of 8 per minute per start.")
     if warnings:
         lines.append("")
         lines.extend(warnings)
@@ -1511,14 +1651,16 @@ def main() -> None:
     previous = config.get("previous_start_lists", [])
     if previous:
         config["_previous_pairs"] = load_previous_pairs(previous, args.config.parent)
-    if ruleset(config) == FISO_2027:
-        # FISO 2027 keeps the 6 normal / 8 absolute per-minute limits; never allow more than 8.
-        config["max_load"] = min(int(config.get("max_load", 6)), 8)
-        config["peak_load"] = min(int(config.get("peak_load", 8)), 8)
+    # Load limits per minute per start: 6 normally (max_load, may be raised up to 8), never more than 8.
+    config["max_load"] = min(int(config.get("max_load", 6)), 8)
+    config["peak_load"] = min(int(config.get("peak_load", 8)), 8)
     entries = load_entries(args.athletes, config)
-    relax_large_masters(entries, config)
+    relax_large_categories(entries, config)
     slots_by_category = build_category_slots(entries, config)
-    assigned_slots = assign_times(slots_by_category, config)
+    try:
+        assigned_slots = assign_times(slots_by_category, config)
+    except StartListError as error:
+        raise SystemExit(f"ERROR: {error}")
     rows = build_rows(entries, assigned_slots, config)
     write_csv(args.out, rows)
     args.report.write_text(report(rows, config), encoding="utf-8")
