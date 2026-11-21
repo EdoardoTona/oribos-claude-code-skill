@@ -652,13 +652,50 @@ def place_all(
     return Placement(placed, None, over_max, collisions)
 
 
+def first_control_bound(slots_by_category: dict[str, list[Slot]]) -> int:
+    """At most one starter per first control per minute: the busiest first control needs this many minutes."""
+    counts = Counter(
+        slot.entry.first_control for slots in slots_by_category.values() for slot in slots if slot.entry.first_control
+    )
+    return max(counts.values(), default=1) - 1
+
+
 def auto_window(slots_by_category: dict[str, list[Slot]], config: dict) -> int:
-    """Contained start window: long enough for the longest category at its minimum interval and for
-    an average load of `target_load` starters per minute (default 5, the middle of FISO's 4-6)."""
+    """Contained start window: long enough for the longest category at its minimum interval, for the
+    busiest first control and for an average load of `target_load` starters per minute (default 5,
+    the middle of FISO's 4-6)."""
     total = sum(len(slots) for slots in slots_by_category.values())
     target = float(config.get("target_load", 5))
     longest = max(((len(slots) - 1) * interval_for(config, category) for category, slots in slots_by_category.items()), default=0)
-    return max(longest, math.ceil(total / target) - 1)
+    bound = 0 if config.get("allow_first_control_collision") else first_control_bound(slots_by_category)
+    return max(longest, bound, math.ceil(total / target) - 1)
+
+
+def candidate_orders(slots_by_category: dict[str, list[Slot]], intervals: dict[str, int], seed: int, attempts: int) -> list[list[str]]:
+    """Category placement orders to try. The first one (largest category first) is the historical order;
+    the others put categories on the busiest first controls / with the longest span first, then
+    seeded random variations of that."""
+    names = sorted(slots_by_category)
+    size = {c: len(slots_by_category[c]) for c in names}
+    span = {c: (size[c] - 1) * intervals[c] for c in names}
+    first = {c: (slots_by_category[c][0].entry.first_control if slots_by_category[c] else "") for c in names}
+    pressure = Counter()
+    for c in names:
+        pressure[first[c]] += size[c]
+    orders = [
+        sorted(names, key=lambda c: (-size[c], c)),
+        sorted(names, key=lambda c: (-pressure[first[c]], -span[c], c)),
+        sorted(names, key=lambda c: (-span[c], -size[c], c)),
+    ]
+    rng = random.Random(seed)
+    while len(orders) < attempts:
+        noise = {c: rng.random() for c in names}
+        orders.append(sorted(names, key=lambda c: (-pressure[first[c]] * (0.5 + noise[c]), -span[c], c)))
+    unique: list[list[str]] = []
+    for order in orders:
+        if order not in unique:
+            unique.append(order)
+    return unique
 
 
 def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list[Slot]:
@@ -668,34 +705,58 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     max_load = int(config.get("max_load", 6))
     peak_load = int(config.get("peak_load", max(8, max_load)))
     allow_collision = bool(config.get("allow_first_control_collision", False))
-    order = sorted(slots_by_category, key=lambda category: (-len(slots_by_category[category]), category))
-    intervals = {category: interval_for(config, category) for category in order}
+    intervals = {category: interval_for(config, category) for category in slots_by_category}
+    attempts = int(config.get("placement_attempts", 12))
+    orders = candidate_orders(slots_by_category, intervals, int(config.get("random_seed", 1)), attempts)
 
-    # 1. Minimum intervals must fit. An automatic window grows (5% steps) until they do.
-    result = place_all(order, slots_by_category, intervals, window, max_load, peak_load, allow_collision)
-    while result.failed and automatic and window < 24 * 60:
-        window = math.ceil(window * 1.05) + 1
-        result = place_all(order, slots_by_category, intervals, window, max_load, peak_load, allow_collision)
-    if result.failed:
-        raise RuntimeError(
-            f"Cannot place category {result.failed!r}; increase window, load limit, interval, or start lanes."
-        )
+    def place(order: list[str], window: int) -> Placement:
+        return place_all(order, slots_by_category, intervals, window, max_load, peak_load, allow_collision)
+
+    def first_fit(window: int, preferred: list[str] | None = None) -> tuple[list[str], Placement] | None:
+        tried = [preferred] if preferred else []
+        for order in tried + [o for o in orders if o != preferred]:
+            result = place(order, window)
+            if not result.failed:
+                return order, result
+        return None
+
+    # 1. Minimum intervals must fit, trying several category orders. An automatic window grows
+    #    (3% steps) until they do; a fixed window that cannot work reports the window that would.
+    found = first_fit(window)
+    if found is None:
+        needed = window
+        while found is None and needed < 24 * 60:
+            needed = math.ceil(needed * 1.03) + 1
+            found = first_fit(needed)
+        if not automatic or found is None:
+            hint = f" about {needed} minutes would be needed" if found else ""
+            raise RuntimeError(
+                f"Cannot place all categories in window_minutes={window};{hint} — increase the window, "
+                "the load limit or the start lanes, or reduce intervals/vacants."
+            )
+        window = needed
+    order, result = found
 
     # 2. Widen intervals inside the same window ("water filling"): repeatedly give +1 minute to the
     #    category with the smallest interval, keeping the change only if every category still fits,
     #    no minute gets more over max_load and no first-control collision is added.
     caps = {}
-    for category in order:
+    for category in intervals:
         gaps = max(1, len(slots_by_category[category]) - 1)
         caps[category] = max(intervals[category], min(max_interval_for(config, category), window // gaps))
-    frozen = {category for category in order if intervals[category] >= caps[category]}
-    while len(frozen) < len(order):
+    frozen = {category for category in intervals if intervals[category] >= caps[category]}
+    while len(frozen) < len(intervals):
         category = min(
-            (c for c in order if c not in frozen),
+            (c for c in intervals if c not in frozen),
             key=lambda c: (intervals[c], -len(slots_by_category[c]), c),
         )
         intervals[category] += 1
-        trial = place_all(order, slots_by_category, intervals, window, max_load, peak_load, allow_collision)
+        trial = place(order, window)
+        if trial.failed:
+            # The current order may simply not suit the new intervals: try the others once.
+            alternative = first_fit(window, order)
+            if alternative is not None:
+                order, trial = alternative
         if trial.failed or trial.over_max > result.over_max or trial.collisions > result.collisions:
             intervals[category] -= 1
             frozen.add(category)
