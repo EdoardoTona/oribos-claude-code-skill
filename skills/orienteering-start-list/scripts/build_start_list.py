@@ -1130,13 +1130,16 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                 if culprits is None or len(failing) < len(culprits[0]):
                     culprits = (failing, candidate_order, packed)
         limit_categories = int(config.get("compact_max_categories", 3))
-        min_saving = int(config.get("compact_min_saving", 5))
+        # A small saving is not worth a shorter interval: the larger (master) interval wins unless the grid
+        # gets more than `compact_min_saving` minutes shorter.
+        min_saving = int(config.get("compact_min_saving", 10))
         compacted = None
+        small_saving = None
         failing = list(culprits[0]) if culprits else []
         if 0 < len(failing) <= limit_categories:
             # Lever: master categories held at the FISO master minimum (3 minutes outside sprint) above the
             # normal interval go back to the normal interval (2), for these categories only. Kept only if
-            # the grid gets at least `compact_min_saving` minutes shorter.
+            # the grid gets more than `compact_min_saving` minutes shorter.
             lowered = {}
             if race_type(config) != "sprint":
                 for c in failing:
@@ -1149,9 +1152,11 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                 for c, (_, normal) in lowered.items():
                     base_intervals[c] = normal
                 new_window, new_found = grow(initial_window - 1, grown)
-                if new_found is not None and new_window <= grown - min_saving:
+                if new_found is not None and grown - new_window > min_saving:
                     compacted = (new_window, new_found, lowered)
                 else:
+                    if new_found is not None and new_window < grown:
+                        small_saving = (grown - new_window, sorted(lowered))
                     base_intervals.clear()
                     base_intervals.update(saved_base)
         if compacted is not None:
@@ -1170,6 +1175,7 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                 config["_overflow"] = {
                     "categories": failing, "window": initial_window, "grown": grown,
                     "too_many": len(failing) > limit_categories,
+                    "small_saving": small_saving,
                 }
 
     # 2. Widen intervals inside the same window ("water filling"): repeatedly give +1 minute to the
@@ -1338,11 +1344,19 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         )
     overflow = config.get("_overflow")
     if overflow:
-        reason = (
-            "too many to compact" if overflow["too_many"]
-            else "they cannot be compacted within the rules (the overflow comes from how several categories share "
-            "first controls)"
-        )
+        if overflow["too_many"]:
+            reason = "too many to compact"
+        elif overflow.get("small_saving"):
+            minutes, names = overflow["small_saving"]
+            reason = (
+                f"giving {', '.join(names)} the normal interval instead of the master minimum would save only "
+                f"{minutes} minutes, so the larger interval is kept"
+            )
+        else:
+            reason = (
+                "they cannot be compacted within the rules (the overflow comes from how several categories share "
+                "first controls)"
+            )
         lines.extend(
             [
                 "",
