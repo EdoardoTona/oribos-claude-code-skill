@@ -479,9 +479,64 @@ def improve_order(
                 best, best_cost = result[:], current
         else:
             result[index], result[other] = result[other], result[index]
+    if reach and len(best) <= 14 and any(
+        left.club and left.club == right.club for left, right in zip(best, best[1:])
+    ):
+        # Small category: the local search can get stuck when several athletes must move at once.
+        # Exhaustive search for an order with no same-club neighbours, own group first (fewest moves).
+        exact = exact_club_order(best, segments, home, reach)
+        if exact is not None and cost(exact) < cost(best):
+            best = exact
     if stats is not None:
         stats["moved"] = sum(1 for index, entry in enumerate(best) if segments[index] != home[entry.athlete_id])
     return best
+
+
+def exact_club_order(
+    order: list[Entry], segments: list[int], home: dict[str, int], reach: int, limit: float = 1.0
+) -> list[Entry] | None:
+    """Depth-first search for an order without same-club neighbours where every athlete stays within
+    `reach` groups of its home group; tries athletes of the position's own group first."""
+    import time
+
+    n = len(order)
+    deadline = time.time() + limit
+    used = [False] * n
+    result: list[Entry] = []
+
+    def rec(pos: int) -> bool:
+        if time.time() > deadline:
+            return False
+        if pos == n:
+            return True
+        prev = result[-1].club if result else None
+        candidates = sorted(
+            (i for i in range(n) if not used[i] and abs(segments[pos] - home[order[i].athlete_id]) <= reach),
+            key=lambda i: (home[order[i].athlete_id] != segments[pos], i),
+        )
+        seen = set()
+        for i in candidates:
+            entry = order[i]
+            if entry.club and entry.club == prev:
+                continue
+            key = (entry.club, home[entry.athlete_id])
+            if key in seen:
+                continue
+            seen.add(key)
+            # nobody may be left behind beyond its reach
+            if pos + 1 < n and any(
+                not used[j] and j != i and home[order[j].athlete_id] + reach < segments[pos + 1] for j in range(n)
+            ):
+                continue
+            used[i] = True
+            result.append(entry)
+            if rec(pos + 1):
+                return True
+            result.pop()
+            used[i] = False
+        return False
+
+    return result[:] if rec(0) else None
 
 
 def load_previous_pairs(paths: list[str], base: Path) -> set[frozenset[str]]:
