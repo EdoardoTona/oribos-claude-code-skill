@@ -23,6 +23,7 @@ Recommended columns:
 - `request_kind`: `early`, `late`, `exact`, or empty.
 - `request_minute`: minute offset from first start for `exact`, or target minute for `early`/`late`.
 - `request_weight`: numeric soft-constraint weight; use higher values for childcare/transport/organizer-approved needs.
+- `start`: physical start (lane/corridor) of the athlete's category, e.g. `1`, `2`. Load limits (`max_load`, `peak_load`, `ramp_up`) apply to each start separately. Can also be set per category in the config (`categories.<name>.start`). In Oribos/LiveResults data each class has a start number.
 
 If `course` or `first_control` is missing, provide it through category/course config.
 
@@ -87,7 +88,8 @@ Minimal example:
 - `master_min_age` (default 35), `master_min_interval_sprint` (default 2), `master_min_interval` (default 3): used by `fiso-2027`.
 - `categories.<name>.master`: force master detection on/off for non-standard category names.
 - `categories.<name>.min_interval`: minimum interval for one category (works with any ruleset).
-- `window_minutes`: maximum total window. Omit it (or use `"auto"`) to compute a contained window from the longest category at minimum interval, the busiest first control and `target_load` (default 5) starters per minute on average.
+- `window_minutes`: maximum total window. Omit it (or use `"auto"`) to compute a contained window from the longest category at minimum interval, the busiest first control and `target_load` starters per minute on average at the busiest start (default 6 for sprint, 5 otherwise). In automatic mode no minute may exceed `max_load` on any start (`auto_over_max_minutes`, default 0): the window grows a little instead.
+- `ramp_up` (default `[1, 2, 4]`): maximum starters per start in the first minutes of the window, so the start can settle in; `[]` disables it.
 - `placement_attempts` (default 30): category orders tried when placing; the first is largest-category-first, then busiest-first-control-first, longest-span-first and seeded variations.
 - `max_interval` (global or per category) and `master_max_interval`: upper limit for widening. Intervals are widened one minute at a time, smallest first, while every category still fits the window without new minutes over `max_load` or new first-control collisions. With `fiso-2027` in non-sprint races, every category defaults to `fiso_max_interval` (7).
 - `separate_clubs` (global or per category): defaults to `true` for categories with a random component (full shuffle, `random_groups`, `random_block`); swaps stay inside the shuffle scope. On a fixed-order ranked category, `true` uses the legacy greedy separation, which can break the ranking order. `club_separation_min_entries` (default 4): smaller categories are not separated. `club_move_to_neighbour_group` (default true): when swaps inside a group/block cannot separate same-club athletes, allow moving them to the adjacent group/block.
@@ -114,5 +116,6 @@ The script writes:
 - `athlete_id`
 - `vacant`
 - `request`
+- `start`
 
 Downstream integrations can add event-software-specific IDs later.

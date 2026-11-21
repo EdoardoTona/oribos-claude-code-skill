@@ -30,6 +30,7 @@ class Entry:
     request_minute: int | None
     request_weight: float
     source_row: dict[str, str]
+    start_lane: str = "1"
 
 
 @dataclass
@@ -204,9 +205,19 @@ def load_entries(athletes_path: Path, config: dict) -> list[Entry]:
                     request_minute=as_int(value(row, "request_minute")),
                     request_weight=as_float(value(row, "request_weight"), 1.0),
                     source_row=row,
+                    start_lane=start_lane_for(config, row, category),
                 )
             )
     return entries
+
+
+def start_lane_for(config: dict, row: dict[str, str], category: str) -> str:
+    """Physical start (lane/corridor) of the category: categories.<name>.start, the athletes CSV
+    `start` column, or "1". Load limits apply to each start separately."""
+    cfg = category_config(config, category)
+    if "start" in cfg:
+        return str(cfg["start"]).strip() or "1"
+    return value(row, "start") or "1"
 
 
 def strength_key(entry: Entry, mode: str) -> tuple[float, str, str, str]:
@@ -535,6 +546,8 @@ def build_category_slots(entries: list[Entry], config: dict) -> dict[str, list[S
         course = ordered[0].course if ordered else str(cfg.get("course", ""))
         first_control = ordered[0].first_control if ordered else first_control_for(config, {"category": category}, course)
         vacants = [vacant_entry(category, course, first_control, idx + 1) for idx in range(vacant_count)]
+        for vacant in vacants:
+            vacant.start_lane = ordered[0].start_lane if ordered else str(cfg.get("start", "1"))
         if vacant_position == "start":
             ordered = vacants + ordered
         elif vacant_position == "none":
@@ -589,13 +602,13 @@ class Board:
     """Start load and first controls per minute of the categories placed so far."""
 
     def __init__(self) -> None:
-        self.load: Counter[int] = Counter()
+        self.load: Counter[tuple[str, int]] = Counter()  # (start lane, minute) -> starters
         self.first: dict[int, Counter[str]] = defaultdict(Counter)
 
     def add(self, slots: list[Slot]) -> None:
         for slot in slots:
             assert slot.minute is not None
-            self.load[slot.minute] += 1
+            self.load[(slot.entry.start_lane, slot.minute)] += 1
             if slot.entry.first_control:
                 self.first[slot.minute][slot.entry.first_control] += 1
 
@@ -608,13 +621,14 @@ def offset_score(
     max_load: int,
     peak_load: int,
     allow_collision: bool,
+    ramp: tuple[int, ...] = (),
 ) -> float:
     score = 0.0
     squares = 0
     for index, slot in enumerate(slots):
         minute = offset + index * interval
-        load = board.load[minute] + 1
-        if load > peak_load:
+        load = board.load[(slot.entry.start_lane, minute)] + 1
+        if load > peak_load or (minute < len(ramp) and load > ramp[minute]):
             return math.inf
         if load > max_load:
             score += (load - max_load) * 100
@@ -645,6 +659,7 @@ def best_placement(
     peak_load: int,
     allow_collision: bool,
     pack: float = 0.0,
+    ramp: tuple[int, ...] = (),
 ) -> tuple[list[Slot] | None, float]:
     span = (len(slots) - 1) * interval if slots else 0
     best_score = math.inf
@@ -652,7 +667,7 @@ def best_placement(
     for offset in range(0, max(0, window - span) + 1):
         # pack > 0 favours the earliest valid offset, so categories sharing a busy first control
         # interleave without leaving holes on it (first fit) instead of spreading the load.
-        score = offset_score(board, slots, offset, interval, max_load, peak_load, allow_collision) + pack * offset
+        score = offset_score(board, slots, offset, interval, max_load, peak_load, allow_collision, ramp) + pack * offset
         if score < best_score:
             best_score, best_offset = score, offset
     if best_offset is None:
@@ -680,13 +695,14 @@ def place_all(
     peak_load: int,
     allow_collision: bool,
     packed: frozenset[str] = frozenset(),
+    ramp: tuple[int, ...] = (),
 ) -> Placement:
     board = Board()
     placed: list[Slot] = []
     for category in order:
         candidate, score = best_placement(
             board, slots_by_category[category], intervals[category], window, max_load, peak_load, allow_collision,
-            pack=1.0 if category in packed else 0.0,
+            pack=1.0 if category in packed else 0.0, ramp=ramp,
         )
         if candidate is None or math.isinf(score):
             return Placement(placed, category, 0, 0)
@@ -709,8 +725,9 @@ def auto_window(slots_by_category: dict[str, list[Slot]], config: dict) -> int:
     """Contained start window: long enough for the longest category at its minimum interval, for the
     busiest first control and for an average load of `target_load` starters per minute (default 5,
     the middle of FISO's 4-6)."""
-    total = sum(len(slots) for slots in slots_by_category.values())
-    target = float(config.get("target_load", 5))
+    per_lane = Counter(slot.entry.start_lane for slots in slots_by_category.values() for slot in slots)
+    total = max(per_lane.values(), default=0)  # the busiest start sets the pace
+    target = float(config.get("target_load", 6 if race_type(config) == "sprint" else 5))
     longest = max(((len(slots) - 1) * interval_for(config, category) for category, slots in slots_by_category.items()), default=0)
     bound = 0 if config.get("allow_first_control_collision") else first_control_bound(slots_by_category)
     return max(longest, bound, math.ceil(total / target) - 1)
@@ -755,6 +772,7 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     allow_collision = bool(config.get("allow_first_control_collision", False))
     intervals = {category: interval_for(config, category) for category in slots_by_category}
     attempts = int(config.get("placement_attempts", 30))
+    ramp = tuple(int(value) for value in config.get("ramp_up", [1, 2, 4]))
     orders = candidate_orders(slots_by_category, intervals, int(config.get("random_seed", 1)), attempts)
 
     fc_count = Counter(
@@ -773,7 +791,7 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
 
     def place(order: list[str], window: int, packed: frozenset[str] | None = None) -> Placement:
         packed = mode["packed"] if packed is None else packed
-        return place_all(order, slots_by_category, intervals, window, max_load, peak_load, allow_collision, packed)
+        return place_all(order, slots_by_category, intervals, window, max_load, peak_load, allow_collision, packed, ramp)
 
     def first_fit(window: int, preferred: list[str] | None = None) -> tuple[list[str], Placement] | None:
         tried = [preferred] if preferred else []
@@ -806,14 +824,25 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                     result[c] = target
         return result
 
+    # With an automatic window, minutes above max_load (peaks up to peak_load) are only accepted up to
+    # `auto_over_max_minutes` (default 0): a slightly longer window is better than a sustained 7-8 per minute.
+    over_allowed = int(config.get("auto_over_max_minutes", 0)) if automatic else None
+
+    def acceptable(found: tuple[list[str], Placement] | None) -> bool:
+        return found is not None and (over_allowed is None or found[1].over_max <= over_allowed)
+
     def fit_window(window: int) -> tuple[list[str], Placement] | None:
         intervals.update(base_intervals)
         found = first_fit(window)
+        if found is not None and not acceptable(found):
+            found = None
         if found is None:
             aligned = harmonized(window)
             if aligned != base_intervals:
                 intervals.update(aligned)
                 found = first_fit(window)
+                if found is not None and not acceptable(found):
+                    found = None
                 if found is None:
                     intervals.update(base_intervals)
         return found
@@ -898,6 +927,7 @@ def row_for(slot: Slot, first_start: str) -> dict[str, str]:
         "athlete_id": entry.athlete_id,
         "vacant": "True" if entry.row_type == "vacant" else "",
         "request": entry.request,
+        "start": entry.start_lane,
     }
 
 
@@ -918,6 +948,7 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
         "athlete_id",
         "vacant",
         "request",
+        "start",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -929,6 +960,8 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
     assigned = [row for row in rows if row["row_type"] in {"assigned", "vacant"}]
     free = [row for row in rows if row["row_type"] == "free"]
     load = Counter(int(row["minute"]) for row in assigned if row["minute"])
+    lane_load = Counter((row.get("start") or "1", int(row["minute"])) for row in assigned if row["minute"])
+    lanes = sorted({lane for lane, _ in lane_load})
     first_counts = defaultdict(Counter)
     for row in assigned:
         first_counts[int(row["minute"])][row["first_control"]] += 1
@@ -954,9 +987,11 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         lines.extend(
             [
                 f"Window: {min(load)}-{max(load)} minutes",
-                f"Peak load: {max(load.values())}",
-                f"Minutes over max_load={config.get('max_load', 6)}: "
-                f"{sum(1 for value in load.values() if value > int(config.get('max_load', 6)))}",
+                f"Starts (lanes): {', '.join(lanes)}",
+                f"Peak load per start: {max(lane_load.values())}",
+                f"Minutes over max_load={config.get('max_load', 6)} (per start): "
+                f"{sum(1 for value in lane_load.values() if value > int(config.get('max_load', 6)))}",
+                f"Ramp-up at the beginning: {config.get('ramp_up', [1, 2, 4])} max per start in the first minutes",
             ]
         )
         window_target = int(config.get("_window", config.get("window_minutes", 90)))
@@ -973,11 +1008,12 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         [
             f"First-control collisions: {len(collisions)}",
             "",
-            "Load by minute:",
+            "Load by minute" + (" (per start: " + " / ".join(lanes) + ")" if len(lanes) > 1 else "") + ":",
         ]
     )
     for minute in sorted(load):
-        lines.append(f"- {minute}: {load[minute]}")
+        detail = " (" + " / ".join(str(lane_load[(lane, minute)]) for lane in lanes) + ")" if len(lanes) > 1 else ""
+        lines.append(f"- {minute}: {load[minute]}{detail}")
     lines.extend(category_report(rows, config))
     if collisions:
         lines.extend(["", "Collisions:"])
@@ -1049,12 +1085,14 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
                 "",
                 "FISO 2027 checks: master (35+) minimum interval "
                 f"{config.get('master_min_interval_sprint', 2)} min sprint / {config.get('master_min_interval', 3)} min other races; "
-                "load target 4-6 per minute, never above 8.",
+                "load target 4-6 per minute per start, never above 8.",
             ]
         )
-        peak = Counter(int(row["minute"]) for rows_ in by_category.values() for row in rows_ if row["minute"])
+        peak = Counter(
+            (row.get("start") or "1", int(row["minute"])) for rows_ in by_category.values() for row in rows_ if row["minute"]
+        )
         if peak and max(peak.values()) > 8:
-            warnings.append(f"WARNING: peak load {max(peak.values())} exceeds the FISO limit of 8 per minute.")
+            warnings.append(f"WARNING: peak load {max(peak.values())} exceeds the FISO limit of 8 per minute per start.")
     if warnings:
         lines.append("")
         lines.extend(warnings)

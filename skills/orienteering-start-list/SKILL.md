@@ -13,7 +13,7 @@ description: Create fair orienteering start list proposals as CSV files from ath
    - Previous races of the same weekend/multi-day event: their proposal CSVs, to avoid repeating consecutive pairs.
    - First start time and desired total window. Scale the window with entries: 80-90 minutes is reasonable for a few hundred middle-distance runners; 800 runners may need 150-220 minutes or multiple start lanes.
    - Start interval: sprint usually 1 minute, middle usually 2 minutes, long 2 or 3 minutes (often the same as middle; confirm with the organizer). Oribos also supports 30-second intervals.
-   - Maximum start load per minute: prefer fewer; 6 average/normal maximum is manageable, short peaks of 7-8 (occasionally 9 in large events) may be acceptable, higher usually requires more physical start lanes/corridors.
+   - Maximum start load per minute, per physical start: prefer fewer; 6 average/normal maximum is manageable, short peaks of 7-8 (occasionally 9 in large events) may be acceptable, higher usually requires more physical start lanes/corridors. Ask which start each category uses when there is more than one.
    - Course for each category and the first control for each course. Importing courses into event software is not required, but first controls are essential for avoiding conflicts.
    - Free-start categories. Always ask; common examples are Beginners, M/W10, M/W12, Direct.
    - Vacant policy. Ask case by case for free-start categories. For grid categories, default to 2 vacants unless told otherwise (real events use 1-3, with 2 the most common); small categories (fewer than 10 athletes) get 1.
@@ -46,7 +46,7 @@ description: Create fair orienteering start list proposals as CSV files from ath
 
 Italian events from 2027 follow extra FISO guidelines; read `references/fiso-2027.md`. In short:
 
-- Same limits as before: contained window, 4-6 starters per minute, never more than 8.
+- Same limits as before: contained window, 4-6 starters per minute, never more than 8 — per physical start (separate starts each have that throughput; read each category's start from the event data). Sprint may run at 6 per minute. Ramp up each start gradually (1, 2, 4, then normal pace).
 - Master categories (35+): minimum interval 2 minutes in sprint, 3 minutes in other races.
 - In non-sprint races every category gets the widest interval the window allows (4-7 minutes are fine), constant within the category; the total window does not grow. The script picks the intervals itself, sharing the room fairly between categories.
 - No same-club athletes one after the other, except in very small categories; in seeded categories first within the same strength group/block, otherwise moving an athlete to the adjacent group/block.
