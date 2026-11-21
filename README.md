@@ -42,7 +42,7 @@ Reads and edits OG4/OG3 files.
 
 ### `orienteering-start-list`
 
-Builds start list proposals as reviewable CSV files plus a report (it never writes event files): start load per physical start, intervals (masters and long races at least 3 minutes, wider intervals when the window allows it, IOF intervals for Elite in WRE races), first-control collisions (only with the organizer's approval), seeding by strength groups, same-club separation, vacants and varied neighbours across multi-day races.
+Builds start list proposals as reviewable CSV files plus a report (it never writes event files): start load per physical start, intervals (masters and long races at least 3 minutes, wider intervals when the window allows it, IOF intervals for Elite in WRE races), first-control collisions (only with the organizer's approval), sensitive categories (youngest and 70+) at the beginning, seeding by strength groups, same-club separation, vacants and varied neighbours across multi-day races.
 
 | File                           | Contents                                                     |
 | ------------------------------ | ------------------------------------------------------------ |

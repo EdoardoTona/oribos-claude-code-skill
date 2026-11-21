@@ -132,6 +132,23 @@ def is_junior(config: dict, category: str) -> bool:
     return bool(match) and int(match.group(1)) <= int(config.get("junior_max_age", 20)) and not is_elite(config, category)
 
 
+def is_sensitive(config: dict, category: str) -> bool:
+    """Sensitive categories start at the beginning of the grid when possible: the youngest (age class up to
+    `sensitive_young_max_age` = 14 included: M10, W12, M 13/14) and the oldest (`sensitive_old_min_age` = 70 and
+    over: M70, W75, M80). Elite categories never are. Override with categories.<name>.sensitive; switch the rule
+    off with `sensitive_early: false`."""
+    cfg = category_config(config, category)
+    if "sensitive" in cfg:
+        return bool(cfg["sensitive"])
+    if not bool(config.get("sensitive_early", True)) or is_elite(config, category):
+        return False
+    match = AGE_PATTERN.match(category)
+    if not match:
+        return False
+    age = int(match.group(1))
+    return age <= int(config.get("sensitive_young_max_age", 14)) or age >= int(config.get("sensitive_old_min_age", 70))
+
+
 def fixed_interval_for(config: dict, category: str) -> int | None:
     """Intervals that are never widened nor raised:
     - WRE races (`wre: true`): the Elite categories follow the IOF rules: sprint 1, middle 2, long 3 (`wre_long_interval`).
@@ -891,6 +908,7 @@ def best_placement(
     allow_collision: bool,
     pack: float = 0.0,
     ramp: tuple[int, ...] = (),
+    early: float = 0.0,
 ) -> tuple[list[Slot] | None, float]:
     span = (len(slots) - 1) * interval if slots else 0
     best_score = math.inf
@@ -898,7 +916,9 @@ def best_placement(
     for offset in range(0, max(0, window - span) + 1):
         # pack > 0 favours the earliest valid offset, so categories sharing a busy first control
         # interleave without leaving holes on it (first fit) instead of spreading the load.
-        score = offset_score(board, slots, offset, interval, max_load, peak_load, allow_collision, ramp) + pack * offset
+        # early > 0 (sensitive categories) costs every minute the category's first start is delayed.
+        score = offset_score(board, slots, offset, interval, max_load, peak_load, allow_collision, ramp)
+        score += (pack + early) * offset
         if score < best_score:
             best_score, best_offset = score, offset
     if best_offset is None:
@@ -930,9 +950,12 @@ def place_all(
     ramp: tuple[int, ...] = (),
     collide: frozenset[str] = frozenset(),
     skip_failures: bool = False,
+    sensitive: frozenset[str] = frozenset(),
+    early_weight: float = 0.0,
 ) -> Placement:
     """Place categories in order. `collide`: categories allowed first-control collisions (fewest possible).
-    skip_failures: keep going after a failure and report all failing categories in `failed_all`."""
+    skip_failures: keep going after a failure and report all failing categories in `failed_all`.
+    sensitive: categories that should start as early as possible (`early_weight` per minute of delay)."""
     board = Board()
     placed: list[Slot] = []
     failed_all: list[str] = []
@@ -940,6 +963,7 @@ def place_all(
         candidate, score = best_placement(
             board, slots_by_category[category], intervals[category], window, max_load, peak_load,
             allow_collision or category in collide, pack=1.0 if category in packed else 0.0, ramp=ramp,
+            early=early_weight if category in sensitive else 0.0,
         )
         if candidate is None or math.isinf(score):
             if skip_failures:
@@ -1007,10 +1031,15 @@ def auto_window(slots_by_category: dict[str, list[Slot]], config: dict, include_
     return window
 
 
-def candidate_orders(slots_by_category: dict[str, list[Slot]], intervals: dict[str, int], seed: int, attempts: int) -> list[list[str]]:
+def candidate_orders(
+    slots_by_category: dict[str, list[Slot]], intervals: dict[str, int], seed: int, attempts: int,
+    sensitive: frozenset[str] = frozenset(),
+) -> list[list[str]]:
     """Category placement orders to try. The first one (largest category first) is the historical order;
     the others put categories on the busiest first controls / with the longest span first, then
-    seeded random variations of that."""
+    seeded random variations of that. With sensitive categories, the deterministic orders are tried first
+    with the sensitive categories placed before the others (so they take the first minutes); the plain
+    orders follow, so the grid never gets longer because of them."""
     names = sorted(slots_by_category)
     size = {c: len(slots_by_category[c]) for c in names}
     span = {c: (size[c] - 1) * intervals[c] for c in names}
@@ -1030,6 +1059,9 @@ def candidate_orders(slots_by_category: dict[str, list[Slot]], intervals: dict[s
     while len(orders) < attempts:
         noise = {c: rng.random() for c in names}
         orders.append(sorted(names, key=lambda c: (-pressure[first[c]] * (0.5 + noise[c]), -span[c], c)))
+    if sensitive:
+        early_first = [[c for c in order if c in sensitive] + [c for c in order if c not in sensitive] for order in orders[:4]]
+        orders = early_first + orders
     unique: list[list[str]] = []
     for order in orders:
         if order not in unique:
@@ -1051,7 +1083,9 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     intervals = {category: interval_for(config, category) for category in slots_by_category}
     attempts = int(config.get("placement_attempts", 30))
     ramp = tuple(int(value) for value in config.get("ramp_up", [1, 2, 4]))
-    orders = candidate_orders(slots_by_category, intervals, int(config.get("random_seed", 1)), attempts)
+    sensitive = frozenset(category for category in slots_by_category if is_sensitive(config, category))
+    early_weight = float(config.get("sensitive_weight", 3.0))
+    orders = candidate_orders(slots_by_category, intervals, int(config.get("random_seed", 1)), attempts, sensitive)
 
     fc_count = Counter(
         leg_key(slot.entry) for slots in slots_by_category.values() for slot in slots if slot.entry.first_control
@@ -1071,7 +1105,7 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
         packed = mode["packed"] if packed is None else packed
         return place_all(
             order, slots_by_category, intervals, window, max_load, peak_load, allow_collision, packed, ramp,
-            collide=mode["collide"],
+            collide=mode["collide"], sensitive=sensitive, early_weight=early_weight,
         )
 
     def first_fit(window: int, preferred: list[str] | None = None) -> tuple[list[str], Placement] | None:
@@ -1244,7 +1278,7 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
             for candidate_order in orders:
                 trial = place_all(
                     candidate_order, slots_by_category, intervals, initial_window, max_load, peak_load, False,
-                    packed, ramp, skip_failures=True,
+                    packed, ramp, skip_failures=True, sensitive=sensitive, early_weight=early_weight,
                 )
                 failing = trial.failed_all or []
                 if culprits is None or len(failing) < len(culprits[0]):
@@ -1297,9 +1331,33 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                     "small_saving": small_saving,
                 }
 
+    def delay(placement: Placement) -> int:
+        """Sum of the first-start minutes of the sensitive categories (0 when there are none)."""
+        first: dict[str, int] = {}
+        for slot in placement.slots:
+            if slot.entry.category in sensitive and slot.minute is not None:
+                first[slot.entry.category] = min(first.get(slot.entry.category, slot.minute), slot.minute)
+        return sum(first.values())
+
+    # 1c. Sensitive categories first: with the window fixed, try every category order and keep the one that
+    #     starts the sensitive categories earliest, without more minutes over max_load or more collisions.
+    if sensitive:
+        best_key = (result.over_max, result.collisions, delay(result))
+        modes = [mode["packed"]] + [m for m in (frozenset(), frozenset(slots_by_category)) if m != mode["packed"]]
+        for packed in modes:
+            for candidate_order in orders:
+                trial = place(candidate_order, window, packed)
+                if trial.failed:
+                    continue
+                key = (trial.over_max, trial.collisions, delay(trial))
+                if key < best_key:
+                    best_key, order, result = key, candidate_order, trial
+                    mode["packed"] = packed
+
     # 2. Widen intervals inside the same window ("water filling"): repeatedly give +1 minute to the
     #    category with the smallest interval, keeping the change only if every category still fits,
-    #    no minute gets more over max_load and no first-control collision is added.
+    #    no minute gets more over max_load, no first-control collision is added and no sensitive category
+    #    starts later.
     caps = {}
     for category in intervals:
         gaps = max(1, len(slots_by_category[category]) - 1)
@@ -1311,17 +1369,20 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
             key=lambda c: (intervals[c], -len(slots_by_category[c]), c),
         )
         intervals[category] += 1
-        trial = place(order, window)
+        trial_order, trial = order, place(order, window)
         if trial.failed:
             # The current order may simply not suit the new intervals: try the others once.
             alternative = first_fit(window, order)
             if alternative is not None:
-                order, trial = alternative
-        if trial.failed or trial.over_max > result.over_max or trial.collisions > result.collisions:
+                trial_order, trial = alternative
+        if (
+            trial.failed or trial.over_max > result.over_max or trial.collisions > result.collisions
+            or delay(trial) > delay(result)
+        ):
             intervals[category] -= 1
             frozen.add(category)
             continue
-        result = trial
+        order, result = trial_order, trial
         if intervals[category] >= caps[category]:
             frozen.add(category)
 
@@ -1551,6 +1612,7 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
             by_category[row["category"]].append(row)
     lines = ["", "Categories (interval, master, seeding):"]
     warnings: list[str] = []
+    sensitive_starts: list[tuple[str, int]] = []
     for category in sorted(by_category):
         cfg = category_config(config, category)
         cat_rows = by_category[category]
@@ -1588,6 +1650,9 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
         repeated = config.get("_repeated_pairs", {}).get(category)
         if config.get("_previous_pairs") and repeated is not None:
             notes.append(f"{repeated} consecutive pairs repeated from previous races")
+        if is_sensitive(config, category) and minutes:
+            notes.append("sensitive: starts as early as possible")
+            sensitive_starts.append((category, min(minutes)))
         if "interval" in cfg:
             notes.append(f"fixed at {interval} min (categories.{category}.interval)")
         elif fixed_interval_for(config, category) is not None:
@@ -1628,6 +1693,22 @@ def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
             "load 4-6 per minute per start, never above 8.",
         ]
     )
+    if sensitive_starts:
+        sensitive_starts.sort(key=lambda item: (item[1], item[0]))
+        lines.append(
+            f"Sensitive categories (up to {config.get('sensitive_young_max_age', 14)} and "
+            f"{config.get('sensitive_old_min_age', 70)}+), first start minute: "
+            + ", ".join(f"{category} {minute}" for category, minute in sensitive_starts)
+        )
+        window = int(config.get("_window", 0) or 0)
+        late = [(category, minute) for category, minute in sensitive_starts if window and minute > window // 4]
+        if late:
+            lines.append(
+                "NOTE: these sensitive categories could not start in the first quarter of the grid without making it "
+                "longer (first controls, load, intervals): "
+                + ", ".join(f"{category} at minute {minute}" for category, minute in late)
+                + ". Options: their own first control, another start, or a longer window."
+            )
     peak = Counter(
         (row.get("start") or "1", int(row["minute"])) for rows_ in by_category.values() for row in rows_ if row["minute"]
     )

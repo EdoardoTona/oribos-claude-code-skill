@@ -17,6 +17,7 @@ description: Create fair orienteering start list proposals as CSV files from ath
    - Maximum start load per minute, per physical start: 4-6 normally, 6 as the usual maximum, short peaks up to 8, never more than 8; more requires more physical start lanes/corridors. Ask which start each category uses when there is more than one.
    - Course for each category and the first control for each course. Importing courses into event software is not required, but first controls are essential for avoiding conflicts.
    - Free-start categories. Always ask; common examples are Beginners, M/W10, M/W12, Direct.
+   - Sensitive categories, which start at the beginning of the grid: by default the youngest (up to 14 included) and the supermasters (70 and over). Ask whether to add or remove any.
    - Vacant policy. Ask case by case for free-start categories. For grid categories, default to 2 vacants unless told otherwise (real events use 1-3, with 2 the most common); small categories (fewer than 10 athletes) get 1.
    - Ranking/list-base policy for elite or seeded classes: WRE, Italian list, national list, custom points/rank. Invert rankings by default when requested.
    - Multi-day policy: decide how each stage differs from the others. If the organizer says "random", use actual reproducible randomization, not a deterministic sort that only looks random.
@@ -51,6 +52,7 @@ Read `references/baseline-rules.md` before building a proposal. In short:
 - Intervals: masters (35+) at least 2 minutes in sprint and 3 in other races; in long races every category at least 3. These minimums are a strong recommendation, given up (back to the normal interval, that category only) only with too many entries: categories of 50+ athletes, or up to 3 categories that would make the grid more than 10 minutes longer. The report warns every time.
 - Every category gets the widest constant interval the window allows (up to 7 minutes, 4 in sprint), unless the organizer says otherwise; the total window does not grow for it. Elite and Junior (up to 20 included) stay at 1 minute in sprint; in WRE races (`"wre": true`) the Elite categories keep the IOF intervals (sprint 1, middle 2, long 3).
 - Categories sharing a start and first control need compatible intervals (2 and 4 yes, 2 and 3 no); different starts to the same first control are different legs and never collide.
+- Sensitive categories (youngest up to 14 included, 70 and over) start at the beginning of the grid whenever possible, before widening; never at the cost of a longer grid. The report lists their first starts and notes the ones that had to start later.
 - First-control collisions need the organizer's approval. Too few distinct first controls: the script stops, reports the busiest first control and the fewest collisions found; the organizer decides (more first controls, more starts, longer window, or approve the collisions).
 - Ranked categories (Coppa Italia, lista base, WRE): randomize within about 3 strength groups; Elite categories within blocks of 5 or 10 so the strongest stay at the end.
 - No same-club athletes one after the other, except in very small categories; random categories are repaired with random swaps (no club favoured at the start or end), seeded ones within the strength group/block, otherwise moving an athlete to the adjacent group/block.
@@ -78,8 +80,9 @@ Use this priority unless the organizer changes it:
 3. Fixed race rules: interval, free-start categories, seeded category requirements.
 4. Strong timing requests: childcare, transport, organiser-approved exact needs.
 5. Category window and total race window.
-6. Separate same-club runners within category when possible (inside the shuffle scope for seeded categories; skipped for categories with fewer than 4 athletes).
-7. Soft early/late preferences and aesthetic balance.
+6. Sensitive categories (youngest up to 14, 70 and over) at the beginning of the grid.
+7. Separate same-club runners within category when possible (inside the shuffle scope for seeded categories; skipped for categories with fewer than 4 athletes).
+8. Soft early/late preferences, wider intervals and aesthetic balance.
 
 If the constraints do not fit, explain the tradeoff and adjust the window, load limit, intervals, or number of start lanes rather than silently breaking hard constraints.
 

@@ -22,7 +22,7 @@ The IOF rules define fixed intervals per race type. The default practice widens 
 
 Notes:
 - The IOF rules apply to IOF events (WOC, JWOC, WMOC, World Cup, regional championships, WRE). In WRE races the defaults apply to every category except the Elite ones.
-- A fixed 1-minute category takes every minute on its first control: categories sharing that start and first control cannot interleave with it and run before or after it, which can lengthen the grid (Finali Coppa Italia 2026 sprint: 155 instead of 148 minutes).
+- A fixed 1-minute category takes every minute on its first control: categories sharing that start and first control cannot interleave with it and run before or after it, which can lengthen the grid.
 - The script works in whole minutes: the IOF 1.5-minute options are not available (see the 30-second note in SKILL.md).
 
 ## Start Order (Draw)
