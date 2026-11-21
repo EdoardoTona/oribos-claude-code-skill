@@ -295,6 +295,14 @@ def load_entries(athletes_path: Path, config: dict) -> list[Entry]:
                     start_lane=start_lane_for(config, row, category),
                 )
             )
+    # Athlete ids identify athletes across races (previous_start_lists) and inside strength groups: they must
+    # be unique, otherwise those steps silently mix athletes up.
+    duplicates = sorted(i for i, n in Counter(entry.athlete_id for entry in entries).items() if n > 1)
+    if duplicates:
+        raise StartListError(
+            f"{len(duplicates)} athlete ids are used more than once ({', '.join(duplicates[:10])}"
+            f"{'...' if len(duplicates) > 10 else ''}): every athlete needs a unique id."
+        )
     return entries
 
 
@@ -916,6 +924,8 @@ def best_placement(
     early: float = 0.0,
 ) -> tuple[list[Slot] | None, float]:
     span = (len(slots) - 1) * interval if slots else 0
+    if span > window:
+        return None, math.inf  # the category alone is longer than the window
     best_score = math.inf
     best_offset: int | None = None
     for offset in range(0, max(0, window - span) + 1):
@@ -1124,6 +1134,22 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
                     mode["packed"] = packed
                     return order, result
         return None
+
+    # A fixed window shorter than a single category at its minimum interval cannot work: say which one.
+    if not automatic:
+        too_long = [
+            (category, len(slots), intervals[category])
+            for category, slots in slots_by_category.items()
+            if (len(slots) - 1) * intervals[category] > window
+        ]
+        if too_long:
+            raise StartListError(
+                f"window_minutes={window} is shorter than "
+                + ", ".join(f"{c} alone ({n} slots at {d} min = {(n - 1) * d} minutes)" for c, n, d in too_long)
+                + ". Options: a longer window, a lower categories.<name>.min_interval for "
+                + ("that category" if len(too_long) == 1 else "those categories")
+                + " (below the recommended minimum: the organizer decides), fewer vacants, or split it over two starts."
+            )
 
     # 1. Minimum intervals must fit, trying several category orders. An automatic window grows
     #    (3% steps) until they do; a fixed window that cannot work reports the window that would.
@@ -1740,10 +1766,10 @@ def main() -> None:
     # Load limits per minute per start: 6 normally (max_load, may be raised up to 8), never more than 8.
     config["max_load"] = min(int(config.get("max_load", 6)), 8)
     config["peak_load"] = min(int(config.get("peak_load", 8)), 8)
-    entries = load_entries(args.athletes, config)
-    relax_large_categories(entries, config)
-    slots_by_category = build_category_slots(entries, config)
     try:
+        entries = load_entries(args.athletes, config)
+        relax_large_categories(entries, config)
+        slots_by_category = build_category_slots(entries, config)
         assigned_slots = assign_times(slots_by_category, config)
     except StartListError as error:
         raise SystemExit(f"ERROR: {error}")

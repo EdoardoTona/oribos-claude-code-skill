@@ -6,7 +6,7 @@ Use this reference when adapting arbitrary race exports to `scripts/build_start_
 
 Required columns:
 
-- `id`: stable athlete identifier for this proposal.
+- `id`: stable athlete identifier, unique (the script stops on duplicates) and the same across the races of a multi-day event.
 - `last_name`
 - `first_name`
 - `club`
@@ -90,7 +90,7 @@ All rules in `baseline-rules.md` apply by default; these options change them.
 - Sensitive categories (start at the beginning when possible, before widening): age classes up to `sensitive_young_max_age` (14) included and from `sensitive_old_min_age` (70) included, Elite excluded; override with `categories.<name>.sensitive`, switch off with `sensitive_early: false`. `sensitive_weight` (3): placement cost per minute of delay of their first start. `sensitive_max_interval` (4): widening limit for sensitive categories (a per-category `max_interval` wins).
 - `categories.<name>.interval`: exact interval for one category: no minimum, no widening, never changed by the script.
 - `pace`: `compact` (default: finish early, `max_load` − 0.5 per start on average) or `spread` (spread the starts: `max_load` − 2 per start and at least `spread_factor` = 1.3 times the compact window, so small races spread too; the extra room goes into wider intervals). With `many_starts` (3) or more starts the target is one lower. `target_load` overrides both.
-- `window_minutes`: maximum total window. Omit it (or use `"auto"`) to compute a contained window from the longest category at its minimum interval, the busiest first control and `target_load` starters per minute on average at the busiest start. In automatic mode no minute may exceed `max_load` on any start (`auto_over_max_minutes`, default 0): the window grows a little instead.
+- `window_minutes`: maximum total window. Omit it (or use `"auto"`) to compute a contained window from the longest category at its minimum interval, the busiest first control and `target_load` starters per minute on average at the busiest start. In automatic mode no minute may exceed `max_load` on any start (`auto_over_max_minutes`, default 0): the window grows a little instead. A fixed window shorter than a single category at its minimum interval stops the script, naming the category and the options.
 - `widen_intervals` (global or per category, default `true`): give every category the widest constant interval the window allows. Upper limits: `categories.<name>.max_interval`, `master_max_interval` (masters), `max_interval` (global), otherwise 7 minutes (`sprint_max_interval` = 4 in sprint); sensitive categories at most `sensitive_max_interval` (4). Intervals are widened one minute at a time, smallest first, while every category still fits the window without new minutes over `max_load` or new first-control collisions.
 - Too many entries: `large_category` (50), `compact_max_categories` (3) and `compact_min_saving` (10 minutes). A category of 50+ athletes whose span at the recommended minimum would make the grid more than 10 minutes longer than the rest needs (or not fit a fixed window) gets the normal interval; when only up to 3 categories overflow the automatic window and they are held at a recommended minimum, they get the normal interval if the grid becomes more than 10 minutes shorter. Both are reported with a WARNING.
 - First-control collisions are counted per start: the same first control used from different starts is not a collision.
