@@ -88,6 +88,7 @@ Minimal example:
 - `master_min_age` (default 35), `master_min_interval_sprint` (default 2), `master_min_interval` (default 3): used by `fiso-2027`.
 - `categories.<name>.master`: force master detection on/off for non-standard category names.
 - `categories.<name>.min_interval`: minimum interval for one category (works with any ruleset).
+- `pace`: `compact` (default: finish early, `max_load` − 0.5 per start on average) or `spread` (spread the starts: `max_load` − 2 per start and at least `spread_factor` = 1.3 times the compact window, so small races spread too; the extra room goes into wider intervals). With 3 or more starts the target is one lower. `target_load` overrides both.
 - `window_minutes`: maximum total window. Omit it (or use `"auto"`) to compute a contained window from the longest category at minimum interval, the busiest first control and `target_load` starters per minute on average at the busiest start (default `max_load` − 0.5; `max_load` − 1.5 when there are `many_starts` = 3 or more starts). In automatic mode no minute may exceed `max_load` on any start (`auto_over_max_minutes`, default 0): the window grows a little instead.
 - `max_load` may be raised up to 8 under `fiso-2027` to shorten the grid.
 - `master_large_category` (default 50): under `fiso-2027`, larger master categories whose 3-minute span would exceed the load-based window get `min_interval` 2 with a warning.

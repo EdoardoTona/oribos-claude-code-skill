@@ -534,10 +534,7 @@ def relax_large_masters(entries: list[Entry], config: dict) -> None:
     grid = [entry for entry in entries if entry.row_type == "assigned"]
     per_category = Counter(entry.category for entry in grid)
     per_lane = Counter(entry.start_lane for entry in grid)
-    if "target_load" in config:
-        target = float(config["target_load"])
-    else:
-        target = float(config.get("max_load", 6)) - (1.5 if len(per_lane) >= int(config.get("many_starts", 3)) else 0.5)
+    target = target_for(len(per_lane), config)
     load_window = math.ceil(max(per_lane.values(), default=0) / max(1.0, target)) - 1
     large = int(config.get("master_large_category", 50))
     for category, count in per_category.items():
@@ -753,15 +750,27 @@ def first_control_bound(slots_by_category: dict[str, list[Slot]]) -> int:
     return max(counts.values(), default=1) - 1
 
 
-def target_load(slots_by_category: dict[str, list[Slot]], config: dict) -> float:
-    """Average starters per minute per start used to size an automatic window: 5-6 (max_load - 0.5),
-    or 4-5 (max_load - 1.5) when the event runs 3 or more separate starts, which is harder to manage."""
+PACES = {"compact": 0.5, "spread": 2.0}
+
+
+def target_for(lanes: int, config: dict) -> float:
+    """Average starters per minute per start used to size an automatic window.
+    pace "compact" (default): finish early, max_load - 0.5 (5.5 with the usual 6);
+    pace "spread": spread the starts more, max_load - 2 (about 4).
+    With 3 or more separate starts, which are harder to manage, one less."""
     if "target_load" in config:
         return float(config["target_load"])
+    pace = str(config.get("pace", "compact")).lower()
+    if pace not in PACES:
+        raise RuntimeError(f"Unknown pace {pace!r}: use one of {', '.join(PACES)}")
     max_load = float(config.get("max_load", 6))
+    many = lanes >= int(config.get("many_starts", 3))
+    return max(1.0, max_load - PACES[pace] - (1.0 if many else 0.0))
+
+
+def target_load(slots_by_category: dict[str, list[Slot]], config: dict) -> float:
     lanes = {slot.entry.start_lane for slots in slots_by_category.values() for slot in slots}
-    many = len(lanes) >= int(config.get("many_starts", 3))
-    return max(1.0, max_load - (1.5 if many else 0.5))
+    return target_for(len(lanes), config)
 
 
 def auto_window(slots_by_category: dict[str, list[Slot]], config: dict, include_first_controls: bool = True) -> int:
@@ -776,7 +785,13 @@ def auto_window(slots_by_category: dict[str, list[Slot]], config: dict, include_
     bound = 0
     if include_first_controls and not config.get("allow_first_control_collision"):
         bound = first_control_bound(slots_by_category)
-    return max(longest, bound, math.ceil(total / target) - 1)
+    window = max(longest, bound, math.ceil(total / target) - 1)
+    if str(config.get("pace", "compact")).lower() == "spread" and "target_load" not in config:
+        # Spread: at least `spread_factor` (default +30%) longer than the compact window, so that small
+        # races (whose length is set by the longest category / first control, not by load) spread too.
+        compact = auto_window(slots_by_category, {**config, "pace": "compact"}, include_first_controls)
+        window = max(window, math.ceil(compact * float(config.get("spread_factor", 1.3))))
+    return window
 
 
 def candidate_orders(slots_by_category: dict[str, list[Slot]], intervals: dict[str, int], seed: int, attempts: int) -> list[list[str]]:
@@ -1111,7 +1126,10 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
                 "increase the window, load limit, or start lanes."
             )
     if config.get("_window_auto"):
-        lines.append(f"Target average load per start for the automatic window: {config.get('_target_load')}")
+        lines.append(
+            f"Target average load per start for the automatic window: {config.get('_target_load')} "
+            f"(pace: {config.get('pace', 'compact')})"
+        )
     fallback = config.get("_fc_fallback")
     if fallback:
         lines.extend(
