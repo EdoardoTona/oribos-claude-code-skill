@@ -1828,6 +1828,9 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         for (lane, first), count in counter.items()
         if count > 1
     ]
+    # Counted as starters beyond the first on the same start, first control and minute (three together = 2),
+    # as in the rest of the script and in the stop message.
+    collision_count = sum(count - 1 for _, _, count in collisions)
     lines = [
         "Orienteering start list proposal",
         "",
@@ -1936,7 +1939,7 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         lines.extend(
             [
                 "",
-                f"WARNING: {len(collisions)} first-control collisions (listed at the end), accepted only because "
+                f"WARNING: {collision_count} first-control collisions (listed at the end), accepted only because "
                 "allow_first_control_collision is true. The organizer must approve each of them.",
             ]
         )
@@ -1954,7 +1957,7 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         )
     lines.extend(
         [
-            f"First-control collisions: {len(collisions)}",
+            f"First-control collisions: {collision_count}",
             "",
             "Load by minute" + (" (per start: " + " / ".join(lanes) + ")" if len(lanes) > 1 else "") + ":",
         ]

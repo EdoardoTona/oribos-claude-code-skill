@@ -48,6 +48,8 @@ def run_script(work: Path, timeout: int) -> dict:
         result["outcome"] = "grid"
         result["window"] = int(re.search(r"Target window: (\d+)", report).group(1))
         result["warnings"] = len(re.findall(r"^WARNING", report, re.M))
+        longer = re.search(r"the grid runs (\d+) minutes instead of (\d+) so that these sensitive", report)
+        result["sensitive_extra"] = int(longer.group(1)) - int(longer.group(2)) if longer else 0
     elif "ERROR: No grid without first-control collisions" in proc.stderr + proc.stdout:
         text = proc.stderr + proc.stdout
         result["outcome"] = "stop: collisions need approval"
@@ -159,10 +161,17 @@ def write_report(results: list[dict], out: Path, years: list[str], seconds: floa
             f"median {sorted(gaps)[len(gaps) // 2]} min longer, at most {max(gaps)} min "
             f"({max((r['window'] - r['exact']['best']) / max(1, r['exact']['best']) for r in optimal):.0%})."
         )
-        beyond = [r["window"] - max(r["exact"]["best"], r.get("pace_floor", 0)) for r in optimal]
+        beyond = [r["window"] - r.get("sensitive_extra", 0) - max(r["exact"]["best"], r.get("pace_floor", 0)) for r in optimal]
         lines.append(
-            f"- Beyond what the pace requires (the larger of optimum and pace floor), same races: none in "
-            f"{sum(1 for g in beyond if g <= 0)}, within 3 min in {sum(1 for g in beyond if g <= 3)}, at most {max(beyond)} min."
+            f"- Beyond what the pace (the larger of optimum and pace floor) and the sensitive categories require, same races: "
+            f"none in {sum(1 for g in beyond if g <= 0)}, within 3 min in {sum(1 for g in beyond if g <= 3)}, at most {max(beyond)} min."
+        )
+    extended = [r for r in grids if r.get("sensitive_extra")]
+    if extended:
+        lines.append(
+            f"- Made longer so that sensitive categories start in the first quarter (`sensitive_window_tolerance`, included in "
+            f"the gaps): {len(extended)} grids, by {min(r['sensitive_extra'] for r in extended)}-"
+            f"{max(r['sensitive_extra'] for r in extended)} min."
         )
     unproven = [r for r in grids if r.get("exact") and not proven(r)]
     if unproven:
@@ -174,7 +183,8 @@ def write_report(results: list[dict], out: Path, years: list[str], seconds: floa
             f"min, at most {found[-1]} min ({worst['event']} {worst['race']}: {worst['window']} vs {best_known(worst)}); "
             "the true gap is at least that, at most the upper end of the Gap column. Beyond what the pace requires "
             f"(the larger of the shortest grid known and the pace floor): at most "
-            f"{max(r['window'] - max(best_known(r), r.get('pace_floor', 0)) for r in unproven)} min."
+            f"{max(r['window'] - r.get('sensitive_extra', 0) - max(best_known(r), r.get('pace_floor', 0)) for r in unproven)} min "
+            "(also leaving out the minutes added for sensitive categories)."
         )
     lines += ["", "## Races", "",
               "| Date | Event | Race | Type | Grid athletes | Starts | Script | Exact optimum | Gap | Pace floor | Real grid | Valid | Time (s) |",
