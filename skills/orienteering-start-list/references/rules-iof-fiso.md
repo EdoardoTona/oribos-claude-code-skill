@@ -34,15 +34,12 @@ FISO RTF 6.10.2 (CO) — the grid must respect:
 - categories sharing a course may start alternately, still keeping their interval;
 - categories starting at the same time must have different first controls;
 - vacant positions at the head or at the tail of the grid, not in the middle.
-If not all criteria can be respected, the Technical Delegate (DT) decides with the race director. The grid is prepared by the race director with the DT's collaboration/approval and must be made known to the competitors at least one hour before the first start.
-
-FISO RTF 6.7 / 7.13: national races use interval or mass start; regional (level 2) races may use free punching start, where the start official still separates competitors of the same category or course by at least 30 seconds.
+If not all criteria can be respected, the Technical Delegate (DT) decides with the race director. The grid is prepared by the race director with the DT's collaboration/approval.
 
 FISO RTF: Elite categories are filled according to the Lista Base when entries are many.
 
 IOF:
 - 12.2 the starting order must be approved by the IOF Event Adviser; the draw may be by hand or computer.
-- 12.3 start lists published at least the day before (one hour before the first start for finals on the same day as qualification).
 - 12.4 all correctly entered competitors are drawn, even if not yet arrived; entries without names are not.
 - 12.5 / 12.6 WOC/World Cup: draw in starting groups based on ranking, random inside each group, best group last; JWOC: random in three starting groups (early, middle, late).
 - 12.7 competitors from the same federation must not start consecutively; if drawn so, the next competitor drawn is inserted between them (for merit order, the draw starts with the best competitor).

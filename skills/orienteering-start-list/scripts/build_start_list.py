@@ -817,6 +817,7 @@ class Placement:
     failed: str | None
     over_max: int
     collisions: int
+    failed_all: list[str] | None = None
 
 
 def place_all(
@@ -829,18 +830,30 @@ def place_all(
     allow_collision: bool,
     packed: frozenset[str] = frozenset(),
     ramp: tuple[int, ...] = (),
+    collide: frozenset[str] = frozenset(),
+    skip_failures: bool = False,
 ) -> Placement:
+    """Place categories in order. `collide`: categories allowed first-control collisions (fewest possible).
+    skip_failures: keep going after a failure and report all failing categories in `failed_all`."""
     board = Board()
     placed: list[Slot] = []
+    failed_all: list[str] = []
     for category in order:
         candidate, score = best_placement(
-            board, slots_by_category[category], intervals[category], window, max_load, peak_load, allow_collision,
-            pack=1.0 if category in packed else 0.0, ramp=ramp,
+            board, slots_by_category[category], intervals[category], window, max_load, peak_load,
+            allow_collision or category in collide, pack=1.0 if category in packed else 0.0, ramp=ramp,
         )
         if candidate is None or math.isinf(score):
+            if skip_failures:
+                failed_all.append(category)
+                continue
             return Placement(placed, category, 0, 0)
         board.add(candidate)
         placed.extend(candidate)
+    if failed_all:
+        result = Placement(placed, failed_all[0], 0, 0)
+        result.failed_all = failed_all
+        return result
     over_max = sum(1 for value in board.load.values() if value > max_load)
     collisions = sum(count - 1 for counter in board.first.values() for count in counter.values() if count > 1)
     return Placement(placed, None, over_max, collisions)
@@ -952,11 +965,14 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
             if slots and fc_count[leg_key(slots[0].entry)] > 0.6 * (window + 1)
         )
 
-    mode = {"packed": frozenset()}
+    mode = {"packed": frozenset(), "collide": frozenset()}
 
     def place(order: list[str], window: int, packed: frozenset[str] | None = None) -> Placement:
         packed = mode["packed"] if packed is None else packed
-        return place_all(order, slots_by_category, intervals, window, max_load, peak_load, allow_collision, packed, ramp)
+        return place_all(
+            order, slots_by_category, intervals, window, max_load, peak_load, allow_collision, packed, ramp,
+            collide=mode["collide"],
+        )
 
     def first_fit(window: int, preferred: list[str] | None = None) -> tuple[list[str], Placement] | None:
         tried = [preferred] if preferred else []
@@ -1034,6 +1050,7 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     # `max_window_stretch` (default +25%) the script accepts the fewest possible first-control
     # collisions instead, and warns.
     fc_bound = first_control_bound(slots_by_category)
+    initial_window = window
     if automatic:
         acceptable_window = auto_window(slots_by_category, config, include_first_controls=False)
         # Percentages alone are too tight for small races: allow at least +20 minutes of search margin.
@@ -1057,11 +1074,23 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
     fallback = None
 
     def grow(start: int, stop: int) -> tuple[int, tuple[list[str], Placement] | None]:
-        needed, found = start, None
-        while found is None and needed < stop:
-            needed = min(stop, math.ceil(needed * 1.03) + 1)
-            found = fit_window(needed)
-        return needed, found
+        """Smallest window above `start` (up to `stop`) that fits: grow in 3% steps, then binary-search
+        back between the last failing and the first fitting window."""
+        low, high, found = start, start, None
+        while found is None and high < stop:
+            low = high
+            high = min(stop, math.ceil(high * 1.03) + 1)
+            found = fit_window(high)
+        if found is None:
+            return high, None
+        best = high
+        while high - low > 1:
+            middle = (low + high) // 2
+            if fit_window(middle) is not None:
+                high = best = middle
+            else:
+                low = middle
+        return best, fit_window(best)  # re-run so intervals match the chosen window
 
     found = None if (automatic and window > limit and not allow_collision) else fit_window(window)
     if found is None and automatic and window <= limit:
@@ -1083,6 +1112,65 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
             "the load limit or the start lanes, or reduce intervals/vacants."
         )
     order, result = found
+
+    # 1b. Few categories overflowing: if the grid had to grow only because one or a few categories do not
+    #     fit the acceptable window, compact them instead (they alone may share a first control with the
+    #     fewest possible collisions); if many categories overflow, the longer grid is the right answer.
+    if automatic and fallback is None and window > initial_window and not allow_collision:
+        grown = window
+        intervals.update(base_intervals)
+        culprits = None
+        for packed in (frozenset(), frozenset(slots_by_category)):
+            for candidate_order in orders:
+                trial = place_all(
+                    candidate_order, slots_by_category, intervals, initial_window, max_load, peak_load, False,
+                    packed, ramp, skip_failures=True,
+                )
+                failing = trial.failed_all or []
+                if culprits is None or len(failing) < len(culprits[0]):
+                    culprits = (failing, candidate_order, packed)
+        limit_categories = int(config.get("compact_max_categories", 3))
+        min_saving = int(config.get("compact_min_saving", 5))
+        compacted = None
+        failing = list(culprits[0]) if culprits else []
+        if 0 < len(failing) <= limit_categories:
+            # Lever: master categories held at the FISO master minimum (3 minutes outside sprint) above the
+            # normal interval go back to the normal interval (2), for these categories only. Kept only if
+            # the grid gets at least `compact_min_saving` minutes shorter.
+            lowered = {}
+            if race_type(config) != "sprint":
+                for c in failing:
+                    if is_master(config, c) and fixed_interval_for(config, c) is None and "min_interval" not in category_config(config, c):
+                        normal = 3 if race_type(config) == "long" else 2
+                        if base_intervals[c] > normal:
+                            lowered[c] = (base_intervals[c], normal)
+            if lowered:
+                saved_base = dict(base_intervals)
+                for c, (_, normal) in lowered.items():
+                    base_intervals[c] = normal
+                new_window, new_found = grow(initial_window - 1, grown)
+                if new_found is not None and new_window <= grown - min_saving:
+                    compacted = (new_window, new_found, lowered)
+                else:
+                    base_intervals.clear()
+                    base_intervals.update(saved_base)
+        if compacted is not None:
+            window, (order, result), lowered = compacted
+            for c, (_, normal) in lowered.items():
+                config.setdefault("categories", {}).setdefault(c, {})["min_interval"] = normal
+            config["_compacted"] = {
+                "categories": {c: v for c, v in lowered.items()}, "window": window, "longer_window": grown,
+            }
+        else:
+            found = fit_window(grown)  # restore the grown solution and its intervals
+            order, result = found
+            if not failing:
+                config["_overflow_load"] = {"window": initial_window, "grown": grown}
+            else:
+                config["_overflow"] = {
+                    "categories": failing, "window": initial_window, "grown": grown,
+                    "too_many": len(failing) > limit_categories,
+                }
 
     # 2. Widen intervals inside the same window ("water filling"): repeatedly give +1 minute to the
     #    category with the smallest interval, keeping the change only if every category still fits,
@@ -1235,6 +1323,43 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         lines.append(
             f"Target average load per start for the automatic window: {config.get('_target_load')} "
             f"(pace: {config.get('pace', 'compact')})"
+        )
+    compacted = config.get("_compacted")
+    if compacted:
+        changed = ", ".join(f"{c} {old}->{new} min" for c, (old, new) in compacted["categories"].items())
+        lines.extend(
+            [
+                "",
+                f"NOTE: only a few categories did not fit the acceptable window. To keep the grid at "
+                f"{compacted['window']} minutes instead of {compacted['longer_window']}, these master categories use "
+                f"the normal interval instead of the FISO master minimum: {changed}. To keep the master minimum, set "
+                f"window_minutes to {compacted['longer_window']} or give these categories their own first control.",
+            ]
+        )
+    overflow = config.get("_overflow")
+    if overflow:
+        reason = (
+            "too many to compact" if overflow["too_many"]
+            else "they cannot be compacted within the rules (the overflow comes from how several categories share "
+            "first controls)"
+        )
+        lines.extend(
+            [
+                "",
+                f"NOTE: {len(overflow['categories'])} categories did not fit the {overflow['window']}-minute window "
+                f"({', '.join(overflow['categories'][:8])}{'...' if len(overflow['categories']) > 8 else ''}): "
+                f"{reason}, so the grid runs {overflow['grown']} minutes.",
+            ]
+        )
+    overflow_load = config.get("_overflow_load")
+    if overflow_load:
+        lines.extend(
+            [
+                "",
+                f"NOTE: every category fits the {overflow_load['window']}-minute window, but not without minutes above "
+                f"max_load on some start: the grid runs {overflow_load['grown']} minutes to keep the load. Raise max_load "
+                "(up to 8) for a shorter grid.",
+            ]
         )
     fallback = config.get("_fc_fallback")
     if fallback:
