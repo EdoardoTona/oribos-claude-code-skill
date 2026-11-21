@@ -9,6 +9,7 @@ description: Create fair orienteering start list proposals as CSV files from ath
 
 1. Gather the race facts before calculating:
    - Race type: sprint, middle, long, or custom interval.
+   - Country/ruleset: for Italian (FISO) events from 2027, read `references/fiso-2027.md` and set `"ruleset": "fiso-2027"` — masters 35+ need at least 2 minutes (sprint) / 3 minutes (other races) and ranked categories are randomized by strength groups.
    - First start time and desired total window. Scale the window with entries: 80-90 minutes is reasonable for a few hundred middle-distance runners; 800 runners may need 150-220 minutes or multiple start lanes.
    - Start interval: sprint usually 1 minute, middle usually 2 minutes, long 2 or 3 minutes (often the same as middle; confirm with the organizer). Oribos also supports 30-second intervals.
    - Maximum start load per minute: prefer fewer; 6 average/normal maximum is manageable, short peaks of 7-8 (occasionally 9 in large events) may be acceptable, higher usually requires more physical start lanes/corridors.
@@ -39,6 +40,17 @@ description: Create fair orienteering start list proposals as CSV files from ath
    - Any requested randomization uses a reported seed and a real shuffle within the requested scope. Do not call a club-balanced or bib-sorted deterministic order "random".
    - In multi-day events, no category should have the same start order in two stages unless the organizer explicitly asks for identical grids or a fixed ranking order makes it unavoidable; report any repeated full order or repeated tail block.
    - Report start load per minute, peak load, window, request satisfaction, club-consecutive issues, and first-control collisions.
+
+## Italy (FISO) From 2027
+
+Italian events from 2027 follow extra FISO guidelines; read `references/fiso-2027.md`. In short:
+
+- Same limits as before: contained window, 4-6 starters per minute, never more than 8.
+- Master categories (35+): minimum interval 2 minutes in sprint, 3 minutes in other races; larger intervals are welcome when entries and window allow.
+- Ranked categories (Coppa Italia, lista base): randomize within about 3 strength groups; elite categories within blocks of 5 or 10 so the strongest stay at the end.
+- Every category may have its own course: more distinct first controls to check, nothing else changes for the start list.
+
+These rules are Italy-specific; do not apply them to other countries or IOF/WRE events unless asked.
 
 ## Seeding Rules
 

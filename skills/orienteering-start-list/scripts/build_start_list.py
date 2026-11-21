@@ -6,6 +6,7 @@ import csv
 import json
 import math
 import random
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,18 +86,67 @@ def absolute_time(first_start: str, minute: int | None) -> str:
     return f"{total // 60:02}:{total % 60:02}:{ss:02}"
 
 
-def interval_for(config: dict, category: str) -> int:
-    category_config = config.get("categories", {}).get(category, {})
-    if "interval" in category_config:
-        return int(category_config["interval"])
+FISO_2027 = "fiso-2027"
+MASTER_PATTERN = re.compile(r"^\s*[MWDHF]\s*-?\s*(\d{2})\b", re.IGNORECASE)
+
+
+def ruleset(config: dict) -> str:
+    return str(config.get("ruleset", "")).strip().lower()
+
+
+def race_type(config: dict) -> str:
+    return str(config.get("race_type", "middle")).lower()
+
+
+def is_master(config: dict, category: str) -> bool:
+    """Master = age class 35+ (M35, W 40, D45, H-50...). Override with categories.<name>.master."""
+    cfg = category_config(config, category)
+    if "master" in cfg:
+        return bool(cfg["master"])
+    match = MASTER_PATTERN.match(category)
+    return bool(match) and int(match.group(1)) >= int(config.get("master_min_age", 35))
+
+
+def min_interval_for(config: dict, category: str) -> int:
+    """Minimum interval imposed by the ruleset (0 = no minimum)."""
+    cfg = category_config(config, category)
+    if "min_interval" in cfg:
+        return int(cfg["min_interval"])
+    if ruleset(config) == FISO_2027 and is_master(config, category):
+        if race_type(config) == "sprint":
+            return int(config.get("master_min_interval_sprint", 2))
+        return int(config.get("master_min_interval", 3))
+    return 0
+
+
+def base_interval_for(config: dict, category: str) -> int:
+    cfg = category_config(config, category)
+    if "interval" in cfg:
+        return int(cfg["interval"])
     if "interval_minutes" in config:
         return int(config["interval_minutes"])
-    race_type = str(config.get("race_type", "middle")).lower()
-    if race_type == "sprint":
+    if race_type(config) == "sprint":
         return 1
-    if race_type == "long":
+    if race_type(config) == "long":
         return 3
     return 2
+
+
+def interval_for(config: dict, category: str) -> int:
+    return max(base_interval_for(config, category), min_interval_for(config, category))
+
+
+def max_interval_for(config: dict, category: str) -> int:
+    """Largest interval worth trying when the window allows it (FISO 2027 encourages wider gaps)."""
+    cfg = category_config(config, category)
+    base = interval_for(config, category)
+    if "max_interval" in cfg:
+        return max(base, int(cfg["max_interval"]))
+    if is_master(config, category) and "master_max_interval" in config:
+        return max(base, int(config["master_max_interval"]))
+    if "max_interval" in config:
+        return max(base, int(config["max_interval"]))
+    return base
 
 
 def category_config(config: dict, category: str) -> dict:
@@ -181,6 +231,44 @@ def randomize_blocks(order: list[Entry], block_size: int, seed: int) -> list[Ent
     return result
 
 
+def randomize_groups(order: list[Entry], groups: int, seed: int) -> list[Entry]:
+    """Split the weak->strong order into `groups` contiguous strength groups and shuffle inside each."""
+    if groups <= 1 or len(order) <= 1:
+        return order
+    rng = random.Random(seed)
+    result: list[Entry] = []
+    size = len(order)
+    for index in range(groups):
+        start = round(index * size / groups)
+        stop = round((index + 1) * size / groups)
+        block = order[start:stop]
+        rng.shuffle(block)
+        result.extend(block)
+    return result
+
+
+def seeding_policy(config: dict, category: str) -> tuple[str, int]:
+    """Return ("block", size), ("groups", count) or ("none", 0) for a ranked category."""
+    cfg = category_config(config, category)
+    if cfg.get("random_block"):
+        return "block", int(cfg["random_block"])
+    if cfg.get("random_groups"):
+        return "groups", int(cfg["random_groups"])
+    if "random_block" in cfg or "random_groups" in cfg:
+        return "none", 0
+    if config.get("random_block"):
+        return "block", int(config["random_block"])
+    if config.get("random_groups"):
+        return "groups", int(config["random_groups"])
+    if ruleset(config) == FISO_2027:
+        # FISO 2027: elite classes shuffled in small blocks (5 or 10) so the strongest stay near the end;
+        # other ranked classes shuffled within ~3 strength groups (Coppa Italia, lista base...).
+        if "elite" in category.lower():
+            return "block", int(config.get("elite_random_block", 5))
+        return "groups", int(config.get("default_random_groups", 3))
+    return "none", 0
+
+
 def separate_clubs(order: list[Entry], preserve_input_ties: bool = False) -> list[Entry]:
     groups: dict[str, list[Entry]] = defaultdict(list)
     club_order: dict[str, int] = {}
@@ -217,7 +305,6 @@ def order_category(entries: list[Entry], config: dict, category: str) -> list[En
     cfg = category_config(config, category)
     rank_mode = str(cfg.get("rank_mode", config.get("rank_mode", "position"))).lower()
     invert = bool(cfg.get("invert_ranking", config.get("invert_ranking", False)))
-    block_size = int(cfg.get("random_block", config.get("random_block", 0)) or 0)
     stage_offset = int(config.get("stage", config.get("race_number", 0)) or 0) * 100000
     seed = int(config.get("random_seed", 1)) + stage_offset + sum(ord(ch) for ch in category)
 
@@ -226,10 +313,15 @@ def order_category(entries: list[Entry], config: dict, category: str) -> list[En
     if not invert:
         ordered.reverse()
 
-    if block_size:
-        ordered = randomize_blocks(ordered, block_size, seed)
-
-    has_seed_policy = any(key in cfg for key in ("rank_mode", "invert_ranking", "random_block"))
+    has_seed_policy = any(
+        key in cfg for key in ("rank_mode", "invert_ranking", "random_block", "random_groups")
+    )
+    if has_seed_policy:
+        policy, size = seeding_policy(config, category)
+        if policy == "block":
+            ordered = randomize_blocks(ordered, size, seed)
+        elif policy == "groups":
+            ordered = randomize_groups(ordered, size, seed)
     randomized_unseeded = False
     if not has_seed_policy and bool(cfg.get("randomize", config.get("randomize_unseeded", True))):
         ordered = shuffle_entries(ordered, seed)
@@ -357,6 +449,38 @@ def evaluate(
     return score
 
 
+def best_placement(
+    placed: list[Slot],
+    slots: list[Slot],
+    interval: int,
+    window: int,
+    max_load: int,
+    peak_load: int,
+    allow_collision: bool,
+) -> tuple[list[Slot] | None, float]:
+    span = (len(slots) - 1) * interval if slots else 0
+    latest_offset = max(0, window - span)
+    best_score = math.inf
+    best_candidate: list[Slot] | None = None
+    for offset in range(0, latest_offset + 1):
+        candidate = [
+            Slot(entry=slot.entry, category_position=slot.category_position, minute=offset + index * interval)
+            for index, slot in enumerate(slots)
+        ]
+        score = evaluate(placed, candidate, max_load, peak_load, allow_collision)
+        if score < best_score:
+            best_score = score
+            best_candidate = candidate
+    return best_candidate, best_score
+
+
+def over_max_load(placed: list[Slot], candidate: list[Slot], max_load: int) -> bool:
+    load = Counter(slot.minute for slot in placed if slot.minute is not None)
+    for slot in candidate:
+        load[slot.minute] += 1
+    return any(load[slot.minute] > max_load for slot in candidate)
+
+
 def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list[Slot]:
     window = int(config.get("window_minutes", 90))
     max_load = int(config.get("max_load", 6))
@@ -367,27 +491,33 @@ def assign_times(slots_by_category: dict[str, list[Slot]], config: dict) -> list
         slots_by_category,
         key=lambda category: (-len(slots_by_category[category]), category),
     )
+    chosen_intervals: dict[str, int] = {}
     for category in categories:
         slots = slots_by_category[category]
-        interval = interval_for(config, category)
-        span = (len(slots) - 1) * interval if slots else 0
-        latest_offset = max(0, window - span)
-        best_score = math.inf
+        min_interval = interval_for(config, category)
         best_candidate: list[Slot] | None = None
-        for offset in range(0, latest_offset + 1):
-            candidate = [
-                Slot(entry=slot.entry, category_position=slot.category_position, minute=offset + index * interval)
-                for index, slot in enumerate(slots)
-            ]
-            score = evaluate(placed, candidate, max_load, peak_load, allow_collision)
-            if score < best_score:
-                best_score = score
-                best_candidate = candidate
+        best_score = math.inf
+        # Try the widest allowed interval first; keep it only if it fits the window without
+        # pushing any minute over max_load. Otherwise fall back to the minimum interval.
+        for interval in range(max_interval_for(config, category), min_interval - 1, -1):
+            candidate, score = best_placement(placed, slots, interval, window, max_load, peak_load, allow_collision)
+            span = (len(slots) - 1) * interval if slots else 0
+            fits = (
+                candidate is not None
+                and not math.isinf(score)
+                and span <= window
+                and not over_max_load(placed, candidate, max_load)
+            )
+            if fits or interval == min_interval:
+                best_candidate, best_score = candidate, score
+                chosen_intervals[category] = interval
+                break
         if best_candidate is None or math.isinf(best_score):
             raise RuntimeError(
                 f"Cannot place category {category!r}; increase window, load limit, interval, or start lanes."
             )
         placed.extend(best_candidate)
+    config["_chosen_intervals"] = chosen_intervals
     placed.sort(key=lambda slot: (slot.minute if slot.minute is not None else -1, slot.entry.category, slot.category_position))
     return placed
 
@@ -471,6 +601,7 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
         f"Random seed: {config.get('random_seed', 1)}",
         f"Stage/race offset: {config.get('stage', config.get('race_number', 0))}",
         f"Randomize unseeded categories: {config.get('randomize_unseeded', True)}",
+        f"Ruleset: {config.get('ruleset') or 'generic'}",
     ]
     if load:
         lines.extend(
@@ -496,11 +627,71 @@ def report(rows: list[dict[str, str]], config: dict) -> str:
     )
     for minute in sorted(load):
         lines.append(f"- {minute}: {load[minute]}")
+    lines.extend(category_report(rows, config))
     if collisions:
         lines.extend(["", "Collisions:"])
         for minute, first, count in collisions:
             lines.append(f"- minute {minute}, first control {first}: {count}")
     return "\n".join(lines) + "\n"
+
+
+def category_report(rows: list[dict[str, str]], config: dict) -> list[str]:
+    chosen = config.get("_chosen_intervals", {})
+    by_category: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for row in rows:
+        if row["row_type"] in {"assigned", "vacant"}:
+            by_category[row["category"]].append(row)
+    lines = ["", "Categories (interval, master, seeding):"]
+    warnings: list[str] = []
+    for category in sorted(by_category):
+        cfg = category_config(config, category)
+        cat_rows = by_category[category]
+        minutes = [int(row["minute"]) for row in cat_rows if row["minute"]]
+        interval = chosen.get(category, interval_for(config, category))
+        base = base_interval_for(config, category)
+        minimum = min_interval_for(config, category)
+        master = is_master(config, category)
+        has_seed_policy = any(
+            key in cfg for key in ("rank_mode", "invert_ranking", "random_block", "random_groups")
+        )
+        if has_seed_policy:
+            policy, size = seeding_policy(config, category)
+            seeding = {"block": f"ranking, random blocks of {size}", "groups": f"ranking, {size} random strength groups"}.get(
+                policy, "ranking, no randomization"
+            )
+        elif bool(cfg.get("randomize", config.get("randomize_unseeded", True))):
+            seeding = "full random"
+        else:
+            seeding = "no ranking, not randomized"
+        notes = []
+        if minimum and base < minimum:
+            notes.append(f"raised from {base} to ruleset minimum {minimum}")
+        if interval > max(base, minimum):
+            notes.append("widened because the window allowed it")
+        lines.append(
+            f"- {category}: {len(cat_rows)} slots, interval {interval} min, "
+            f"minutes {min(minutes) if minutes else '-'}-{max(minutes) if minutes else '-'}, "
+            f"master={'yes' if master else 'no'}, seeding: {seeding}"
+            + (f" ({'; '.join(notes)})" if notes else "")
+        )
+        if minimum and interval < minimum:
+            warnings.append(f"WARNING: {category} interval {interval} is below the ruleset minimum {minimum}.")
+    if ruleset(config) == FISO_2027:
+        lines.extend(
+            [
+                "",
+                "FISO 2027 checks: master (35+) minimum interval "
+                f"{config.get('master_min_interval_sprint', 2)} min sprint / {config.get('master_min_interval', 3)} min other races; "
+                "load target 4-6 per minute, never above 8.",
+            ]
+        )
+        peak = Counter(int(row["minute"]) for rows_ in by_category.values() for row in rows_ if row["minute"])
+        if peak and max(peak.values()) > 8:
+            warnings.append(f"WARNING: peak load {max(peak.values())} exceeds the FISO limit of 8 per minute.")
+    if warnings:
+        lines.append("")
+        lines.extend(warnings)
+    return lines
 
 
 def main() -> None:
@@ -512,6 +703,10 @@ def main() -> None:
     args = parser.parse_args()
 
     config = json.loads(args.config.read_text(encoding="utf-8"))
+    if ruleset(config) == FISO_2027:
+        # FISO 2027 keeps the 6 normal / 8 absolute per-minute limits; never allow more than 8.
+        config.setdefault("max_load", 6)
+        config["peak_load"] = min(int(config.get("peak_load", 8)), 8)
     entries = load_entries(args.athletes, config)
     slots_by_category = build_category_slots(entries, config)
     assigned_slots = assign_times(slots_by_category, config)
